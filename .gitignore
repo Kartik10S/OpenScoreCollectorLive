@@ -1,0 +1,11 @@
+# Environments
+.env/
+.venv/
+# vscode
+.vscode/
+.sh
+# debug file
+debug.log
+config.py
+/__pycache__
+*.cache
