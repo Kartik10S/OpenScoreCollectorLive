@@ -105,3 +105,16 @@ if __name__ == "__main__":
     except Exception as e:
         traceback_str = traceback.format_exc()
         sendnotify(f"Error in main.py execution:\n{traceback_str}")
+
+# Add at the end of main.py
+if __name__ == "__main__":
+    import time
+    try:
+        while True:
+            updateToday()
+            time.sleep(300)  # run every 5 minutes
+    except KeyboardInterrupt:
+        logging.info("Worker stopped manually")
+    except Exception as e:
+        traceback_str = traceback.format_exc()
+        sendnotify(f"Error in long-running worker:\n{traceback_str}")
