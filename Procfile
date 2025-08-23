@@ -1,2 +1,2 @@
 web: uvicorn main_api:app --host=0.0.0.0 --port=${PORT:-8000}
-worker: python bot.py
+worker: python main.py updatetoday
