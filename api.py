@@ -68,15 +68,12 @@ def load_and_process_daily_data():
 
     path = get_today_json_path()
     if not os.path.isfile(path):
-        # If the file doesn't exist, it means the background scraper hasn't finished yet.
-        # Don't try to scrape here, as it will cause a timeout.
         raise HTTPException(status_code=503, detail="Data is currently being prepared. Please try again in a minute.")
 
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
-        # Handle cases where the file is empty or corrupted
         raise HTTPException(status_code=503, detail="Data source is temporarily corrupted. An update is in progress.")
 
 
@@ -87,7 +84,8 @@ def load_and_process_daily_data():
 
     for league in data.get("Stages", []):
         league_name = league.get("Snm", "Unknown League")
-        league_id = league.get("Cid")
+        # --- FIX: API now uses the same fallback logic as the scraper ---
+        league_id = league.get("Cid") or league.get("Sid")
         league_logo = LEAGUE_LOGOS.get(league_name, "")
 
         if league_id and league_id not in seen_league_ids:
@@ -142,7 +140,6 @@ async def run_update_task():
         send_telegram_alert(f"Background update failed: {e}")
 
 async def scheduled_update_task(interval: int):
-    # Initial sleep before the first scheduled run to allow startup to complete
     await asyncio.sleep(10) 
     while True:
         await run_update_task()
@@ -152,9 +149,7 @@ async def scheduled_update_task(interval: int):
 @app.on_event("startup")
 async def startup_event():
     logging.info("Application startup...")
-    # Run the first update immediately in the background without blocking startup
     asyncio.create_task(run_update_task())
-    # Start the recurring background task
     asyncio.create_task(scheduled_update_task(interval=600))
     logging.info("Initial data load and background updater have been scheduled.")
 
@@ -247,6 +242,5 @@ def get_top_scorers(league_name: str):
 def trigger_update(background_tasks: BackgroundTasks):
     """Manually triggers a background update of the data."""
     logging.info("Manual update triggered via API.")
-    # Use the async task wrapper to run the update
     background_tasks.add_task(run_update_task)
     return JSONResponse(content={"status": "success", "message": "Update process started in the background."}, status_code=202)
