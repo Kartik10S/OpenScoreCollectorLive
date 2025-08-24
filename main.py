@@ -23,6 +23,18 @@ SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 
+
+# Example league configuration
+LEAGUES = {
+    "eng.1": "Premier League",
+    "esp.1": "La Liga",
+    "ita.1": "Serie A",
+    "fra.1": "Ligue 1",
+    "ger.1": "Bundesliga",
+    # Add more league IDs as needed
+}
+
+
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 os.makedirs(TOPSCORERS_FOLDER, exist_ok=True)

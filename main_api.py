@@ -4,11 +4,24 @@ import json
 import datetime
 import logging
 import asyncio
+import time
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from main import updateToday  # OpenScoreCollector scraper
 from threading import Lock
-import time
 from logos import TEAM_LOGOS, LEAGUE_LOGOS  # ✅ Import logos
+
+# -----------------------------
+# League Config (for updateToday)
+# -----------------------------
+LEAGUES = {
+    "eng.1": "Premier League",
+    "esp.1": "La Liga",
+    "ita.1": "Serie A",
+    "fra.1": "Ligue 1",
+    "ger.1": "Bundesliga",
+    # Add more leagues as needed
+}
 
 # -----------------------------
 # Paths
@@ -33,6 +46,84 @@ app = FastAPI(title="OpenScoreCollector API")
 CACHE = {}
 CACHE_LOCK = Lock()
 CACHE_TTL = 300  # 5 minutes in seconds
+
+def get_cached(key):
+    """Return cached data if not expired."""
+    with CACHE_LOCK:
+        entry = CACHE.get(key)
+        if entry and (time.time() - entry["time"]) < CACHE_TTL:
+            return entry["data"]
+    return None
+
+def set_cache(key, data):
+    """Set cache entry."""
+    with CACHE_LOCK:
+        CACHE[key] = {"data": data, "time": time.time()}
+
+# -----------------------------
+# Helper Functions
+# -----------------------------
+def get_today_json_path():
+    today_str = datetime.date.today().strftime("%Y%m%d")
+    return os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
+
+def load_matches_from_json(path: str):
+    if not os.path.isfile(path):
+        logging.warning(f"No JSON file found at {path}")
+        return []
+
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    matches = []
+    for league in data.get("Stages", []):
+        league_name = league.get("Snm", "Unknown League")
+        league_logo = LEAGUE_LOGOS.get(league_name, league.get("img", ""))  # ✅ Attach logo
+
+        for match in league.get("Events", []):
+            home_name = match.get("T1", [{}])[0].get("Nm", "Home")
+            away_name = match.get("T2", [{}])[0].get("Nm", "Away")
+
+            matches.append({
+                "leagueName": league_name,
+                "leagueLogoUrl": league_logo,
+                "stadium": match.get("Stadium", ""),
+                "homeTeamName": home_name,
+                "homeTeamLogoUrl": TEAM_LOGOS.get(home_name, match.get("T1img", "")),
+                "awayTeamName": away_name,
+                "awayTeamLogoUrl": TEAM_LOGOS.get(away_name, match.get("T2img", "")),
+                "matchTime": match.get("Eps", "Not Started"),
+                "matchStatus": match.get("Eps", "Not Started"),
+                "homeScore": match.get("Tr1", None),
+                "awayScore": match.get("Tr2", None),
+                "matchId": match.get("Id", None)
+            })
+    return matches
+
+def load_match_by_id(match_id: str):
+    matches = load_matches_from_json(get_today_json_path())
+    for match in matches:
+        if str(match.get("matchId")) == str(match_id):
+            return match
+    return None
+
+def load_standings(league_id: str):
+    path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
+    if not os.path.isfile(path):
+        logging.warning(f"No standings for league {league_id}")
+        return []
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("teams", [])
+
+def load_top_scorers(league_id: str):
+    path = os.path.join(STANDINGS_FOLDER, f"{league_id}_topscorers.json")
+    if not os.path.isfile(path):
+        logging.warning(f"No top scorers for league {league_id}")
+        return []
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("players", [])
 
 # -----------------------------
 # API Endpoints with Cache
@@ -88,27 +179,18 @@ def get_top_scorers_endpoint(league_id: str):
     return data
 
 # -----------------------------
-# Update Endpoint (FastAPI style)
+# Update Endpoint (Fixed ✅)
 # -----------------------------
-from fastapi import Request
-from fastapi.responses import JSONResponse
-
 @app.post("/api/update")
-def update(request: Request):
+def update():
     try:
-        print("Running updateToday()...")  # Debug log
+        logging.info("Running updateToday()...")
         updateToday()
-        print("Fixtures updated successfully")
-        return {"status": "success", "message": "Fixtures updated"}
+        logging.info("Fixtures updated successfully")
+        return JSONResponse(content={"status": "success", "message": "Fixtures updated"}, status_code=200)
     except Exception as e:
-        import traceback
-        print("Error in /api/update:", e)
-        traceback.print_exc()
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(e)}
-        )
-
+        logging.error(f"Error in /api/update: {e}", exc_info=True)
+        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
 # -----------------------------
 # Background Updater (Optional)
@@ -118,7 +200,6 @@ async def schedule_updates(interval: int = 300):  # 5 minutes
         try:
             updateToday()
             logging.info("Updated today's matches in background")
-            # Clear cache after update
             with CACHE_LOCK:
                 CACHE.clear()
         except Exception as e:
