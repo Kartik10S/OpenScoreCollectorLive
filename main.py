@@ -9,6 +9,8 @@ import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
 from bs4 import BeautifulSoup
+from scraper import scrape_league_fixtures, scrape_league_standings, scrape_league_topscorers
+from main_api import LEAGUES, send_telegram_alert   # reuse LEAGUES + alert function
 
 # ----------------------
 # Setup logging
@@ -31,7 +33,7 @@ data_store = {
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
-TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
+TOPSCORERS_FOLDER = STANDINGS_FOLDER
 
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
@@ -178,35 +180,62 @@ def updateToday():
     data_store["standings"] = {}
     data_store["top_scorers"] = {}
 
-    for league_id, league_name in LEAGUES.items():
-        try:
-            fixtures_path = os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json")
-            scrape_league_fixtures(league_id)
+    def updateToday():
+     """Scrape and update all leagues for today"""
+    today_str = datetime.date.today().strftime("%Y%m%d")
+    combined_path = os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
 
-            standings_path = os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json")
-            scrape_league_standings(league_id)
+    data_store = {"fixtures": [], "standings": {}, "top_scorers": {}}
 
-            scorers_path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
-            scrape_league_topscorers(league_id)
+    try:
+        for league_id, league_name in LEAGUES.items():
+            try:
+                # --- Scraping ---
+                fixtures_path = os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json")
+                scrape_league_fixtures(league_id)
 
-            if os.path.exists(fixtures_path):
-                with open(fixtures_path, "r", encoding="utf-8") as f:
-                    data_store["fixtures"].append(json.load(f))
+                standings_path = os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json")
+                scrape_league_standings(league_id)
 
-            if os.path.exists(standings_path):
-                with open(standings_path, "r", encoding="utf-8") as f:
-                    data_store["standings"][league_id] = json.load(f)
+                scorers_path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
+                scrape_league_topscorers(league_id)
 
-            if os.path.exists(scorers_path):
-                with open(scorers_path, "r", encoding="utf-8") as f:
-                    data_store["top_scorers"][league_id] = json.load(f)
+                # --- Load scraped files ---
+                if os.path.exists(fixtures_path):
+                    with open(fixtures_path, "r", encoding="utf-8") as f:
+                        data_store["fixtures"].append(json.load(f))
 
-            logging.info(f"✅ Updated league {league_id} - {league_name}")
+                if os.path.exists(standings_path):
+                    with open(standings_path, "r", encoding="utf-8") as f:
+                        data_store["standings"][league_id] = json.load(f)
 
-        except Exception:
-            err = traceback.format_exc()
-            logging.error(err)
-            sendnotify(f"❌ Error updating league {league_id}:\n{err}")
+                if os.path.exists(scorers_path):
+                    with open(scorers_path, "r", encoding="utf-8") as f:
+                        data_store["top_scorers"][league_id] = json.load(f)
+
+                logging.info(f"✅ Updated league {league_id} - {league_name}")
+
+            except Exception as e:
+                err = traceback.format_exc()
+                logging.error(f"❌ Error updating league {league_id}: {e}", exc_info=True)
+            send_telegram_alert(f"❌ Error updating league {league_id}:\n{err}")
+
+        # --- Save combined fixtures JSON (for API endpoints) ---
+        # Flatten fixtures into ESPN-like structure with "Stages"
+        combined_data = {"Stages": data_store["fixtures"]}
+
+        with open(combined_path, "w", encoding="utf-8") as f:
+            json.dump(combined_data, f, indent=2, ensure_ascii=False)
+
+        total_matches = sum(len(stage.get("Events", [])) for stage in combined_data.get("Stages", []))
+        logging.info(f"✅ updateToday saved {len(combined_data.get('Stages', []))} leagues and {total_matches} matches to {combined_path}")
+
+    except Exception as e:
+        err = traceback.format_exc()
+        logging.error(f"❌ updateToday failed: {e}", exc_info=True)
+        send_telegram_alert(f"❌ updateToday crashed:\n{err}")
+        raise
+            
 
 # ----------------------
 # Example league configuration
