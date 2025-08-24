@@ -4,6 +4,7 @@ import datetime
 import logging
 import requests
 import traceback
+import time
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -18,10 +19,39 @@ DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
+SEASON_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "season_fixtures")
 
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 os.makedirs(TOPSCORERS_FOLDER, exist_ok=True)
+os.makedirs(SEASON_FIXTURES_FOLDER, exist_ok=True)
+
+# -----------------------------
+# Central place for team fixture URLs
+# -----------------------------
+TEAM_FIXTURE_URLS = {
+    "arsenal": "https://fixturedownload.com/feed/json/epl-2025/arsenal",
+    "aston-villa": "https://fixturedownload.com/feed/json/epl-2025/aston-villa",
+    "brighton": "https://fixturedownload.com/feed/json/epl-2025/brighton",
+    "brentford": "https://fixturedownload.com/feed/json/epl-2025/brentford",
+    "bournemouth": "https://fixturedownload.com/feed/json/epl-2025/bournemouth",
+    "burnley": "https://fixturedownload.com/feed/json/epl-2025/burnley",
+    "crystal-palace": "https://fixturedownload.com/feed/json/epl-2025/crystal-palace",
+    "chelsea": "https://fixturedownload.com/feed/json/epl-2025/chelsea",
+    "everton": "https://fixturedownload.com/feed/json/epl-2025/everton",
+    "fulham": "https://fixturedownload.com/feed/json/epl-2025/fulham",
+    "leeds": "https://fixturedownload.com/feed/json/epl-2025/leeds",
+    "liverpool": "https://fixturedownload.com/feed/json/epl-2025/liverpool",
+    "man-city": "https://fixturedownload.com/feed/json/epl-2025/man-city",
+    "man-utd": "https://fixturedownload.com/feed/json/epl-2025/man-utd",
+    "newcastle": "https://fixturedownload.com/feed/json/epl-2025/newcastle",
+    "nottm-forest": "https://fixturedownload.com/feed/json/epl-2025/nott'm-forest",
+    "spurs": "https://fixturedownload.com/feed/json/epl-2025/spurs",
+    "sunderland": "https://fixturedownload.com/feed/json/epl-2025/sunderland",
+    "west-ham": "https://fixturedownload.com/feed/json/epl-2025/west-ham",
+    "wolves": "https://fixturedownload.com/feed/json/epl-2025/wolves"
+}
+
 
 # -----------------------------
 # Telegram Alerting
@@ -64,24 +94,74 @@ def fetch_data_for_date(date_str):
         return {} # Return empty dict on failure
 
 # -----------------------------
+# Updated function to fetch and save season fixtures
+# -----------------------------
+def save_team_fixture_data():
+    """
+    Fetches and saves season fixture JSON, but only once per day
+    after a specific time (approximating 11:59 AM IST).
+    """
+    # Target update time in UTC (11:59 AM IST is ~6:29 AM UTC)
+    TARGET_UPDATE_HOUR_UTC = 6
+    TARGET_UPDATE_MINUTE_UTC = 29
+
+    check_file_path = os.path.join(SEASON_FIXTURES_FOLDER, "arsenal.json")
+    now_utc = datetime.datetime.utcnow()
+
+    # If the check file exists, see if we've already updated today
+    if os.path.exists(check_file_path):
+        file_mod_time_utc = datetime.datetime.utcfromtimestamp(os.path.getmtime(check_file_path))
+        # If the file was modified on the same UTC day, we're done.
+        if file_mod_time_utc.date() == now_utc.date():
+            logging.info("Season fixtures have already been updated today. Skipping.")
+            return
+
+    # If we are here, we haven't updated today. Check if it's time to do so.
+    is_time_to_update = (now_utc.hour > TARGET_UPDATE_HOUR_UTC) or \
+                        (now_utc.hour == TARGET_UPDATE_HOUR_UTC and now_utc.minute >= TARGET_UPDATE_MINUTE_UTC)
+
+    if not is_time_to_update:
+        logging.info(f"Not yet time for the daily season fixture update (current UTC: {now_utc.strftime('%H:%M')}, target: >{TARGET_UPDATE_HOUR_UTC:02}:{TARGET_UPDATE_MINUTE_UTC:02}). Skipping.")
+        return
+
+    logging.info("It's time for the daily season fixture update. Fetching new data...")
+    for team_name, url in TEAM_FIXTURE_URLS.items():
+        try:
+            logging.info(f"Fetching fixtures for {team_name} from {url}...")
+            response = requests.get(url, timeout=15)
+            response.raise_for_status()
+            fixtures_data = response.json()
+            
+            file_path = os.path.join(SEASON_FIXTURES_FOLDER, f"{team_name}.json")
+            save_json(fixtures_data, file_path)
+            
+        except requests.RequestException as e:
+            logging.error(f"Could not fetch fixture data for {team_name}: {e}")
+        except json.JSONDecodeError:
+            logging.error(f"Could not parse JSON for {team_name} from {url}")
+            
+    logging.info("Finished fetching team season fixtures.")
+
+
+# -----------------------------
 # Main Scraper Logic
 # -----------------------------
 def updateToday():
     """
-    Scrapes data for the current and previous UTC day to ensure a full
-    24-hour window of matches, handling timezone differences.
+    Scrapes data for daily matches and also saves season-long fixtures.
     """
     logging.info("Starting updateToday process...")
     try:
+        # This will now only download new data once a day
+        save_team_fixture_data()
+
+        # --- Existing daily scraper logic ---
         today_utc = datetime.datetime.utcnow().date()
         yesterday_utc = today_utc - datetime.timedelta(days=1)
-
         today_str = today_utc.strftime('%Y%m%d')
-        # --- FIX: Corrected the date format string for yesterday ---
         yesterday_str = yesterday_utc.strftime('%Y%m%d')
 
-        logging.info(f"Fetching data for {today_str} and {yesterday_str} (UTC)...")
-
+        logging.info(f"Fetching daily data for {today_str} and {yesterday_str} (UTC)...")
         today_data = fetch_data_for_date(today_str)
         yesterday_data = fetch_data_for_date(yesterday_str)
 
@@ -90,8 +170,7 @@ def updateToday():
         merged_stages_dict = {}
         for stage in combined_stages:
             stage_id = stage.get("Sid")
-            if not stage_id:
-                continue
+            if not stage_id: continue
             
             if stage_id not in merged_stages_dict:
                 merged_stages_dict[stage_id] = stage
@@ -101,13 +180,11 @@ def updateToday():
                 merged_stages_dict[stage_id].get("Events", []).extend(new_events)
 
         final_data = {"Stages": list(merged_stages_dict.values())}
-
         save_json(final_data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
 
         for league in final_data.get("Stages", []):
             league_id = league.get("Cid") or league.get("Sid")
-            if not league_id:
-                continue
+            if not league_id: continue
 
             standings = next((tbl for tbl in league.get("Tables", []) if tbl.get("Lnm") == "All"), None)
             if standings:
@@ -117,7 +194,7 @@ def updateToday():
             if top_scorers:
                 save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
         
-        logging.info("✅ updateToday process completed successfully with merged data.")
+        logging.info("✅ updateToday process completed successfully.")
 
     except Exception:
         err = traceback.format_exc()
