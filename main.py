@@ -244,68 +244,56 @@ def scrape_league_topscorers(league_id):
 # Update today
 # ----------------------
 def updateToday():
+    """Scrape and update all leagues for today"""
     global data_store
 
-    data_store["fixtures"] = []
-    data_store["standings"] = {}
-    data_store["top_scorers"] = {}
-
-    def updateToday():
-     """Scrape and update all leagues for today"""
     today_str = datetime.date.today().strftime("%Y%m%d")
     combined_path = os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
 
+    # Reset datastore
     data_store = {"fixtures": [], "standings": {}, "top_scorers": {}}
 
     try:
         for league_id, league_name in LEAGUES.items():
             try:
                 # --- Scraping ---
+                fixtures = scrape_league_fixtures(league_id)
+                standings = scrape_league_standings(league_id)
+                scorers = scrape_league_topscorers(league_id)
+
+                # --- Save to files ---
                 fixtures_path = os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json")
-                scrape_league_fixtures(league_id)
-
                 standings_path = os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json")
-                scrape_league_standings(league_id)
-
                 scorers_path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
-                scrape_league_topscorers(league_id)
 
-                # --- Load scraped files ---
-                if os.path.exists(fixtures_path):
-                    with open(fixtures_path, "r", encoding="utf-8") as f:
-                        data_store["fixtures"].append(json.load(f))
+                save_json(fixtures, fixtures_path)
+                save_json(standings, standings_path)
+                save_json(scorers, scorers_path)
 
-                if os.path.exists(standings_path):
-                    with open(standings_path, "r", encoding="utf-8") as f:
-                        data_store["standings"][league_id] = json.load(f)
-
-                if os.path.exists(scorers_path):
-                    with open(scorers_path, "r", encoding="utf-8") as f:
-                        data_store["top_scorers"][league_id] = json.load(f)
+                # --- Update memory store ---
+                data_store["fixtures"].extend(fixtures)
+                data_store["standings"][league_id] = standings
+                data_store["top_scorers"][league_id] = scorers
 
                 logging.info(f"✅ Updated league {league_id} - {league_name}")
 
-            except Exception as e:
+            except Exception:
                 err = traceback.format_exc()
-                logging.error(f"❌ Error updating league {league_id}: {e}", exc_info=True)
-            send_telegram_alert(f"❌ Error updating league {league_id}:\n{err}")
+                logging.error(f"❌ Error updating league {league_id}:\n{err}")
+                send_telegram_alert(f"❌ Error updating league {league_id}:\n{err}")
 
         # --- Save combined fixtures JSON (for API endpoints) ---
-        # Flatten fixtures into ESPN-like structure with "Stages"
         combined_data = {"Stages": data_store["fixtures"]}
+        save_json(combined_data, combined_path)
 
-        with open(combined_path, "w", encoding="utf-8") as f:
-            json.dump(combined_data, f, indent=2, ensure_ascii=False)
+        total_matches = sum(1 for f in data_store["fixtures"])
+        logging.info(f"✅ updateToday saved {len(LEAGUES)} leagues and {total_matches} matches to {combined_path}")
 
-        total_matches = sum(len(stage.get("Events", [])) for stage in combined_data.get("Stages", []))
-        logging.info(f"✅ updateToday saved {len(combined_data.get('Stages', []))} leagues and {total_matches} matches to {combined_path}")
-
-    except Exception as e:
+    except Exception:
         err = traceback.format_exc()
-        logging.error(f"❌ updateToday failed: {e}", exc_info=True)
+        logging.error(f"❌ updateToday failed:\n{err}")
         send_telegram_alert(f"❌ updateToday crashed:\n{err}")
         raise
-            
 
 # ----------------------
 # Example league configuration
