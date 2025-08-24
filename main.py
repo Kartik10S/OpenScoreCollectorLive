@@ -9,6 +9,14 @@ import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
 
+# Global datastore
+data_store = {
+    "fixtures": [],
+    "standings": {},
+    "topscorers": {},
+    "matches": []
+}
+
 # Folder setup
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
