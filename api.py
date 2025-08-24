@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from threading import Lock
 from scraper import updateToday, send_telegram_alert # Import from scraper
 from logos import TEAM_LOGOS, LEAGUE_LOGOS
+from urllib.parse import unquote
 
 # -----------------------------
 # Setup
@@ -48,29 +49,45 @@ def clear_cache():
     logging.info("Cache cleared.")
 
 # -----------------------------
-# Data Loading Helpers
+# Centralized Data Loading and Processing
 # -----------------------------
-def get_today_json_path():
-    today_str = datetime.date.today().strftime("%Y%m%d")
-    return os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
+def load_and_process_daily_data():
+    """
+    Loads the main daily JSON file, processes it into structured data
+    (matches, leagues), and caches the result. This is the single source
+    of truth for all API endpoints.
+    """
+    cached_data = get_cached("processed_daily_data")
+    if cached_data:
+        return cached_data
 
-def load_matches_from_json():
     path = get_today_json_path()
     if not os.path.isfile(path):
-        logging.warning(f"No JSON file found at {path}. Triggering update.")
+        logging.warning(f"No JSON file found at {path}. Attempting to generate it.")
         try:
             updateToday()
         except Exception as e:
             logging.error(f"Failed to create initial data file: {e}")
-            return []
+            raise HTTPException(status_code=503, detail="Data source is currently unavailable. Please try again later.")
 
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     matches = []
+    league_info_list = []
+    league_name_to_id_map = {}
+    seen_league_ids = set()
+
     for league in data.get("Stages", []):
         league_name = league.get("Snm", "Unknown League")
+        league_id = league.get("Cid")
         league_logo = LEAGUE_LOGOS.get(league_name, "")
+
+        if league_id and league_id not in seen_league_ids:
+            league_info = {"leagueName": league_name, "leagueId": league_id}
+            league_info_list.append(league_info)
+            league_name_to_id_map[league_name] = league_id
+            seen_league_ids.add(league_id)
 
         for event in league.get("Events", []):
             home_team_data = event.get("T1", [{}])[0]
@@ -79,23 +96,25 @@ def load_matches_from_json():
             status_info = event.get("Eps")
 
             matches.append({
-                "leagueName": league_name,
-                "leagueId": league.get("Cid"), # Include league ID
-                "leagueLogoUrl": league_logo,
+                "leagueName": league_name, "leagueId": league_id, "leagueLogoUrl": league_logo,
                 "homeTeamName": home_team_data.get("Nm", "Home"),
                 "homeTeamLogoUrl": TEAM_LOGOS.get(home_team_data.get("Nm", ""), ""),
                 "awayTeamName": away_team_data.get("Nm", "Away"),
                 "awayTeamLogoUrl": TEAM_LOGOS.get(away_team_data.get("Nm", ""), ""),
-                "matchTime": event.get("Esd"),
-                "matchStatus": status_info,
-                "homeScore": scores[0],
-                "awayScore": scores[1],
-                "matchId": event.get("Eid")
+                "matchTime": event.get("Esd"), "matchStatus": status_info,
+                "homeScore": scores[0], "awayScore": scores[1], "matchId": event.get("Eid")
             })
-    return matches
+    
+    processed_data = {
+        "matches": matches,
+        "leagues": league_info_list,
+        "league_map": league_name_to_id_map
+    }
+    set_cache("processed_daily_data", processed_data)
+    return processed_data
 
-def load_data_from_json(file_path: str):
-    """Generic function to load data from a JSON file."""
+def load_secondary_data(file_path: str):
+    """Generic function to load standings or topscorers JSON files."""
     if not os.path.isfile(file_path):
         return None
     with open(file_path, encoding="utf-8") as f:
@@ -105,84 +124,98 @@ def load_data_from_json(file_path: str):
 # Background Task
 # -----------------------------
 async def scheduled_update_task(interval: int):
-    """Runs the update process periodically."""
     while True:
+        await asyncio.sleep(interval)
         try:
             logging.info("Running background update...")
             updateToday()
             clear_cache()
-            logging.info("Background update finished.")
+            logging.info("Background update finished successfully.")
         except Exception as e:
             logging.error(f"Background update failed: {e}")
             send_telegram_alert(f"Background update failed: {e}")
-        await asyncio.sleep(interval)
 
 @app.on_event("startup")
 async def startup_event():
-    """On startup, create the first data file and start the background task."""
     logging.info("Application startup...")
-    initial_update_task = asyncio.create_task(asyncio.to_thread(updateToday))
-    asyncio.create_task(scheduled_update_task(interval=300))
-    await initial_update_task
-    logging.info("Initial data loaded and background updater started.")
+    # Run initial update in the background to not block startup
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(updateToday)
+    # Start the recurring background task
+    asyncio.create_task(scheduled_update_task(interval=600))
+    logging.info("Initial data load and background updater started.")
 
 # -----------------------------
-# API Endpoints
+# API Endpoints (Ordered from most specific to most general)
 # -----------------------------
+@app.get("/")
+def get_root():
+    """Root endpoint to confirm the API is running."""
+    return {"message": "Welcome to the OpenScoreCollector API!"}
+
+@app.get("/api/leagues")
+def get_leagues():
+    """Returns a list of all available leagues for the day."""
+    try:
+        data = load_and_process_daily_data()
+        return data["leagues"]
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+
+
 @app.get("/api/scores")
 @app.get("/api/fixtures")
 def get_scores_and_fixtures():
-    key = "matches"
-    cached = get_cached(key)
-    if cached:
-        return cached
-    
-    all_matches = load_matches_from_json()
-    
-    live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
-    fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
+    try:
+        data = load_and_process_daily_data()
+        all_matches = data["matches"]
+        
+        live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
+        fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
 
-    response_data = {"live": live_scores, "fixtures": fixtures, "all": all_matches}
-    set_cache(key, response_data)
-    return response_data
+        return {"live": live_scores, "fixtures": fixtures, "all": all_matches}
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
-@app.get("/api/standings/{league_id}")
-def get_standings(league_id: str):
-    key = f"standings_{league_id}"
-    cached = get_cached(key)
-    if cached:
-        return cached
+@app.get("/api/standings/{league_name}")
+def get_standings(league_name: str):
+    try:
+        decoded_league_name = unquote(league_name)
+        processed_data = load_and_process_daily_data()
+        
+        league_id = processed_data["league_map"].get(decoded_league_name)
+        if not league_id:
+            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found for today.")
 
-    path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
-    data = load_data_from_json(path)
-    
-    if data is None:
-        raise HTTPException(status_code=404, detail="Standings not found for this league.")
-    
-    # The structure might be {"Lnm": "All", "Tables": [{"team": ...}]}
-    standings_table = data.get("Tables", [])
-    set_cache(key, standings_table)
-    return standings_table
+        path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
+        data = load_secondary_data(path)
+        
+        if data is None:
+            raise HTTPException(status_code=404, detail="Standings data file not found for this league.")
+        
+        return data.get("Tables", [])
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
+@app.get("/api/topscorers/{league_name}")
+def get_top_scorers(league_name: str):
+    try:
+        decoded_league_name = unquote(league_name)
+        processed_data = load_and_process_daily_data()
 
-@app.get("/api/topscorers/{league_id}")
-def get_top_scorers(league_id: str):
-    key = f"topscorers_{league_id}"
-    cached = get_cached(key)
-    if cached:
-        return cached
+        league_id = processed_data["league_map"].get(decoded_league_name)
+        if not league_id:
+            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found for today.")
 
-    path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
-    data = load_data_from_json(path)
+        path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
+        data = load_secondary_data(path)
 
-    if data is None:
-        raise HTTPException(status_code=404, detail="Top scorers not found for this league.")
+        if data is None:
+            raise HTTPException(status_code=404, detail="Top scorers data file not found for this league.")
 
-    # The structure might be {"Players": [...]}
-    players = data.get("Players", [])
-    set_cache(key, players)
-    return players
-
+        return data.get("Players", [])
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
