@@ -1,25 +1,8 @@
 # logos.py
 
-# League Logos
-LEAGUE_LOGOS = {
-    "Premier League": "https://media.api-sports.io/football/leagues/39.png",
-    "La Liga": "https://media.api-sports.io/football/leagues/140.png",
-    "Bundesliga": "https://media.api-sports.io/football/leagues/78.png",
-    "Serie A": "https://media.api-sports.io/football/leagues/135.png",
-    "Ligue 1": "https://media.api-sports.io/football/leagues/61.png",
-    "Major League Soccer": "https://media.api-sports.io/football/leagues/253.png",
-    "Saudi Pro League": "https://media.api-sports.io/football/leagues/307.png",
-    "ISL": "https://media.api-sports.io/football/leagues/323.png",
-    "I-League": "https://media.api-sports.io/football/leagues/324.png",
-    "UEFA Champions League": "https://media.api-sports.io/football/leagues/2.png",
-    "Europa League": "https://media.api-sports.io/football/leagues/3.png",
-    "Conference League": "https://media.api-sports.io/football/leagues/848.png",
-    "Brasileirão": "https://media.api-sports.io/football/leagues/71.png",
-    "Eredivisie": "https://media.api-sports.io/football/leagues/88.png",
-}
-
-# Team Logos (example: Premier League)
+# Team logos
 TEAM_LOGOS = {
+    # Premier League
     "Arsenal": "https://media.api-sports.io/football/teams/42.png",
     "Aston Villa": "https://media.api-sports.io/football/teams/66.png",
     "Bournemouth": "https://media.api-sports.io/football/teams/35.png",
@@ -35,8 +18,72 @@ TEAM_LOGOS = {
     "Manchester United": "https://media.api-sports.io/football/teams/33.png",
     "Newcastle United": "https://media.api-sports.io/football/teams/34.png",
     "Nottingham Forest": "https://media.api-sports.io/football/teams/65.png",
+    "Sunderland": "https://media.api-sports.io/football/teams/60.png",
     "Tottenham": "https://media.api-sports.io/football/teams/47.png",
     "West Ham": "https://media.api-sports.io/football/teams/48.png",
     "Wolves": "https://media.api-sports.io/football/teams/39.png",
     "Burnley": "https://media.api-sports.io/football/teams/44.png",
+
+    # La Liga
+    "Real Madrid": "https://media.api-sports.io/football/teams/418.png",
+    "Barcelona": "https://media.api-sports.io/football/teams/131.png",
+    "Atlético Madrid": "https://media.api-sports.io/football/teams/13.png",
+    "Athletic Bilbao": "https://media.api-sports.io/football/teams/621.png",
+    "Real Sociedad": "https://media.api-sports.io/football/teams/681.png",
+    "Villarreal": "https://media.api-sports.io/football/teams/1050.png",
+    "Real Betis": "https://media.api-sports.io/football/teams/150.png",
+    "Girona": "https://media.api-sports.io/football/teams/12321.png",
+    "Sevilla": "https://media.api-sports.io/football/teams/368.png",
+    "Valencia": "https://media.api-sports.io/football/teams/1049.png",
+    "Celta Vigo": "https://media.api-sports.io/football/teams/940.png",
+    "Getafe": "https://media.api-sports.io/football/teams/3709.png",
+    "Osasuna": "https://media.api-sports.io/football/teams/331.png",
+    "Mallorca": "https://media.api-sports.io/football/teams/237.png",
+    "Espanyol": "https://media.api-sports.io/football/teams/714.png",
+    "Rayo Vallecano": "https://media.api-sports.io/football/teams/367.png",
+    "Alavés": "https://media.api-sports.io/football/teams/1108.png",
+    "Levante": "https://media.api-sports.io/football/teams/3368.png",
+    "Oviedo": "https://media.api-sports.io/football/teams/2497.png",
+
+    # Serie A (partial, can extend)
+    "Inter": "https://media.api-sports.io/football/teams/505.png",
+    "Juventus": "https://media.api-sports.io/football/teams/496.png",
+    "Milan": "https://media.api-sports.io/football/teams/489.png",
+
+    # Ligue 1
+    "Paris Saint-Germain": "https://media.api-sports.io/football/teams/583.png",
+    "Marseille": "https://media.api-sports.io/football/teams/244.png",
+    "Monaco": "https://media.api-sports.io/football/teams/162.png",
+    "Nice": "https://media.api-sports.io/football/teams/417.png",
+    "Lille": "https://media.api-sports.io/football/teams/1082.png",
+    "Rennais": "https://media.api-sports.io/football/teams/273.png",
+    "Toulouse": "https://media.api-sports.io/football/teams/415.png",
+    "Paris FC": "https://media.api-sports.io/football/teams/10004.png",
+    "Lorient": "https://media.api-sports.io/football/teams/1158.png",
+    "Auxerre": "https://media.api-sports.io/football/teams/290.png",
+    "Nantes": "https://media.api-sports.io/football/teams/995.png",
+    "Metz": "https://media.api-sports.io/football/teams/347.png",
+    "Le Havre": "https://media.api-sports.io/football/teams/738.png",
+    "Lens": "https://media.api-sports.io/football/teams/826.png",
+    "Strasbourg": "https://media.api-sports.io/football/teams/667.png",
+    "Brest": "https://media.api-sports.io/football/teams/3911.png",
+    "Angers": "https://media.api-sports.io/football/teams/1420.png",
+}
+
+# League logos
+LEAGUE_LOGOS = {
+    "Premier League": "https://media.api-sports.io/football/leagues/39.png",
+    "La Liga": "https://media.api-sports.io/football/leagues/140.png",
+    "Bundesliga": "https://media.api-sports.io/football/leagues/78.png",
+    "Serie A": "https://media.api-sports.io/football/leagues/135.png",
+    "Ligue 1": "https://media.api-sports.io/football/leagues/61.png",
+    "Major League Soccer": "https://media.api-sports.io/football/leagues/253.png",
+    "Saudi Pro League": "https://media.api-sports.io/football/leagues/307.png",
+    "ISL": "https://media.api-sports.io/football/leagues/323.png",
+    "I-League": "https://media.api-sports.io/football/leagues/324.png",
+    "UEFA Champions League": "https://media.api-sports.io/football/leagues/2.png",
+    "Europa League": "https://media.api-sports.io/football/leagues/3.png",
+    "Conference League": "https://media.api-sports.io/football/leagues/848.png",
+    "Brasileirão": "https://media.api-sports.io/football/leagues/71.png",
+    "Eredivisie": "https://media.api-sports.io/football/leagues/88.png",
 }

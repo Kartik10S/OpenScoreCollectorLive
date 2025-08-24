@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from main import updateToday  # OpenScoreCollector scraper
 from threading import Lock
 import time
-from logos import TEAM_LOGOS, LEAGUE_LOGOS
+from logos import TEAM_LOGOS, LEAGUE_LOGOS  # ✅ Import logos
 
 # -----------------------------
 # Paths
@@ -64,15 +64,21 @@ def load_matches_from_json(path: str):
 
     matches = []
     for league in data.get("Stages", []):
+        league_name = league.get("Snm", "Unknown League")
+        league_logo = LEAGUE_LOGOS.get(league_name, league.get("img", ""))  # ✅ Attach logo
+
         for match in league.get("Events", []):
+            home_name = match.get("T1", [{}])[0].get("Nm", "Home")
+            away_name = match.get("T2", [{}])[0].get("Nm", "Away")
+
             matches.append({
-                "leagueName": league.get("Snm", "Unknown League"),
-                "leagueLogoUrl": league.get("img", ""),
+                "leagueName": league_name,
+                "leagueLogoUrl": league_logo,
                 "stadium": match.get("Stadium", ""),
-                "homeTeamName": match.get("T1", [{}])[0].get("Nm", "Home"),
-                "homeTeamLogoUrl": match.get("T1img", ""),
-                "awayTeamName": match.get("T2", [{}])[0].get("Nm", "Away"),
-                "awayTeamLogoUrl": match.get("T2img", ""),
+                "homeTeamName": home_name,
+                "homeTeamLogoUrl": TEAM_LOGOS.get(home_name, match.get("T1img", "")),  # ✅ Attach team logo
+                "awayTeamName": away_name,
+                "awayTeamLogoUrl": TEAM_LOGOS.get(away_name, match.get("T2img", "")),  # ✅ Attach team logo
                 "matchTime": match.get("Eps", "Not Started"),
                 "matchStatus": match.get("Eps", "Not Started"),
                 "homeScore": match.get("Tr1", None),
@@ -128,12 +134,13 @@ def load_standings(league_id: str):
         data = json.load(f)
     standings = []
     for team in data.get("teams", []):
+        team_name = team.get("teamName")
         standings.append({
             "rank": team.get("rank"),
             "teamId": team.get("teamId"),
-            "teamName": team.get("teamName"),
+            "teamName": team_name,
             "teamAbbreviation": team.get("teamAbbreviation"),
-            "teamLogoUrl": team.get("teamLogoUrl"),
+            "teamLogoUrl": TEAM_LOGOS.get(team_name, team.get("teamLogoUrl")),  # ✅ Attach logo
             "gamesPlayed": team.get("gamesPlayed"),
             "wins": team.get("wins"),
             "draws": team.get("draws"),
@@ -155,7 +162,7 @@ def load_top_scorers(league_id: str):
         top_scorers.append({
             "rank": player.get("rank"),
             "playerName": player.get("playerName"),
-            "playerTeamLogoUrl": player.get("playerTeamLogoUrl"),
+            "playerTeamLogoUrl": TEAM_LOGOS.get(player.get("playerTeam"), player.get("playerTeamLogoUrl")),  # ✅ Attach logo
             "statValue": player.get("statValue")
         })
     return top_scorers
@@ -174,28 +181,12 @@ def get_scores():
 
 @app.get("/api/fixtures")
 def get_fixtures():
-    fixtures = []
-    for file in os.listdir(FIXTURES_FOLDER):
-        if file.endswith(".json"):
-            path = os.path.join(FIXTURES_FOLDER, file)
-            try:
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
-
-                for match in data:
-                    league_name = match.get("leagueName", "")
-                    match["leagueLogoUrl"] = LEAGUE_LOGOS.get(league_name, "")
-
-                    # Replace team logos
-                    home = match.get("homeTeamName", "")
-                    away = match.get("awayTeamName", "")
-                    match["homeTeamLogoUrl"] = TEAM_LOGOS.get(home, "")
-                    match["awayTeamLogoUrl"] = TEAM_LOGOS.get(away, "")
-
-                    fixtures.append(match)
-            except Exception as e:
-                logging.error(f"Error reading fixtures {file}: {e}")
-    return fixtures
+    cached = get_cached("fixtures")
+    if cached:
+        return cached
+    matches = load_matches_from_json(get_today_json_path())
+    set_cache("fixtures", matches)
+    return matches
 
 @app.get("/api/match/{match_id}")
 def get_match_detail(match_id: str):
@@ -219,16 +210,6 @@ def get_standings_endpoint(league_id: str):
     set_cache(key, data)
     return data
 
-@app.get("/api/standings")
-def get_all_standings():
-    """Return standings for all leagues"""
-    all_standings = {}
-    for file in os.listdir(STANDINGS_FOLDER):
-        if file.endswith(".json") and not file.endswith("_topscorers.json"):
-            league_id = file.replace(".json", "")
-            all_standings[league_id] = load_standings(league_id)
-    return all_standings
-
 @app.get("/api/topscorers/{league_id}")
 def get_top_scorers_endpoint(league_id: str):
     key = f"topscorers_{league_id}"
@@ -238,46 +219,6 @@ def get_top_scorers_endpoint(league_id: str):
     data = load_top_scorers(league_id)
     set_cache(key, data)
     return data
-
-@app.get("/api/topscorers")
-def get_all_top_scorers():
-    """Return top scorers for all leagues"""
-    all_scorers = {}
-    for file in os.listdir(STANDINGS_FOLDER):
-        if file.endswith("_topscorers.json"):
-            league_id = file.replace("_topscorers.json", "")
-            all_scorers[league_id] = load_top_scorers(league_id)
-    return all_scorers
-
-
-@app.get("/api/leagues")
-def get_available_leagues():
-    """Return all available leagues with ID, name, and logo if available."""
-    leagues = {}
-
-    for file in os.listdir(STANDINGS_FOLDER):
-        if file.endswith(".json") and not file.endswith("_topscorers.json"):
-            league_id = file.replace(".json", "")
-            path = os.path.join(STANDINGS_FOLDER, file)
-
-            try:
-                with open(path, encoding="utf-8") as f:
-                    data = json.load(f)
-
-                leagues[league_id] = {
-                    "leagueId": league_id,
-                    "leagueName": data.get("leagueName", f"League {league_id}"),
-                    "leagueLogoUrl": data.get("leagueLogoUrl", "")
-                }
-            except Exception as e:
-                logging.error(f"Error reading league file {file}: {e}")
-                leagues[league_id] = {
-                    "leagueId": league_id,
-                    "leagueName": f"League {league_id}",
-                    "leagueLogoUrl": ""
-                }
-
-    return {"leagues": list(leagues.values())}
 
 # -----------------------------
 # Background Updater (Optional)
