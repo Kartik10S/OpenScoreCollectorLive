@@ -8,6 +8,20 @@ import requests
 import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
+from utils import sendnotify, updateToday  # move helper funcs to utils if you prefer
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) > 1 and sys.argv[1] == 'updatetoday':
+            updateToday()
+            logging.info("Update completed successfully")
+        else:
+            logging.info("No action specified. Run with: python main.py updatetoday")
+    except Exception as e:
+        traceback_str = traceback.format_exc()
+        sendnotify(f"Error in main.py execution:\n{traceback_str}")
 
 # Global datastore
 data_store = {
@@ -124,6 +138,9 @@ def scrape_today_matches():
 # ----------------------
 # Update today
 # ----------------------
+# remove this line from top of main.py (since you don't use scraper.py anymore):
+# from scraper import scrape_fixtures, scrape_standings, scrape_topscorers
+
 def updateToday():
     global data_store
 
@@ -132,25 +149,38 @@ def updateToday():
     data_store["top_scorers"] = {}
 
     # Loop through all leagues
-    for league_id, league_info in LEAGUES.items():
+    for league_id, league_name in LEAGUES.items():
         try:
             # --- Fixtures ---
-            fixtures = scrape_fixtures(league_id)
-            if fixtures:
-                data_store["fixtures"].extend(fixtures)
+            fixtures_path = os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json")
+            scrape_league_fixtures(league_id)
 
             # --- Standings ---
-            standings = scrape_standings(league_id)
-            if standings:
-                data_store["standings"][league_id] = standings
+            standings_path = os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json")
+            scrape_league_standings(league_id)
 
             # --- Top Scorers ---
-            scorers = scrape_top_scorers(league_id)
-            if scorers:
-                data_store["top_scorers"][league_id] = scorers
+            scorers_path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
+            scrape_league_topscorers(league_id)
+
+            # Load saved data back into memory
+            if os.path.exists(fixtures_path):
+                with open(fixtures_path, "r", encoding="utf-8") as f:
+                    data_store["fixtures"].append(json.load(f))
+
+            if os.path.exists(standings_path):
+                with open(standings_path, "r", encoding="utf-8") as f:
+                    data_store["standings"][league_id] = json.load(f)
+
+            if os.path.exists(scorers_path):
+                with open(scorers_path, "r", encoding="utf-8") as f:
+                    data_store["top_scorers"][league_id] = json.load(f)
+
+            logging.info(f"✅ Updated league {league_id} - {league_name}")
 
         except Exception as e:
-            print(f"Error updating league {league_id}: {e}")
+            logging.error(f"❌ Error updating league {league_id}: {e}")
+
 
 
 # ----------------------
