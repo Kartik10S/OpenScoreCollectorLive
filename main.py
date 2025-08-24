@@ -27,35 +27,6 @@ data_store = {
 }
 
 
-
-# --- Scraper functions (basic stubs for now) ---
-def scrape_league_fixtures(league_id):
-    try:
-        url = f"https://www.espn.com/soccer/fixtures/_/league/{league_id}"
-        # TODO: implement scraping logic (currently returns empty list)
-        return []
-    except Exception as e:
-        logging.error(f"❌ scrape_league_fixtures failed for {league_id}: {e}")
-        return []
-
-def scrape_league_standings(league_id):
-    try:
-        url = f"https://www.espn.com/soccer/standings/_/league/{league_id}"
-        # TODO: implement scraping logic (currently returns empty dict)
-        return {}
-    except Exception as e:
-        logging.error(f"❌ scrape_league_standings failed for {league_id}: {e}")
-        return {}
-
-def scrape_league_topscorers(league_id):
-    try:
-        url = f"https://www.espn.com/soccer/stats/_/league/{league_id}"
-        # TODO: implement scraping logic (currently returns empty dict)
-        return {}
-    except Exception as e:
-        logging.error(f"❌ scrape_league_topscorers failed for {league_id}: {e}")
-        return {}
-
 # ----------------------
 # Folder setup
 # ----------------------
