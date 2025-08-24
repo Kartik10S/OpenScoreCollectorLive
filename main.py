@@ -8,53 +8,34 @@ import requests
 import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
-import logging, os, sys, json, traceback
+from bs4 import BeautifulSoup
 
-
+# ----------------------
+# Setup logging
+# ----------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-if __name__ == "__main__":
-    try:
-        if len(sys.argv) > 1 and sys.argv[1] == 'updatetoday':
-            updateToday()
-            logging.info("Update completed successfully")
-        else:
-            logging.info("No action specified. Run with: python main.py updatetoday")
-    except Exception as e:
-        traceback_str = traceback.format_exc()
-        sendnotify(f"Error in main.py execution:\n{traceback_str}")
-
+# ----------------------
 # Global datastore
+# ----------------------
 data_store = {
     "fixtures": [],
     "standings": {},
-    "topscorers": {},
+    "top_scorers": {},
     "matches": []
 }
 
+# ----------------------
 # Folder setup
+# ----------------------
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 
-
-# Example league configuration
-LEAGUES = {
-    "eng.1": "Premier League",
-    "esp.1": "La Liga",
-    "ita.1": "Serie A",
-    "fra.1": "Ligue 1",
-    "ger.1": "Bundesliga",
-    # Add more league IDs as needed
-}
-
-
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 os.makedirs(TOPSCORERS_FOLDER, exist_ok=True)
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # ----------------------
 # Telegram notifications
@@ -73,28 +54,40 @@ def sendnotify(message):
         with open(cachefilename, "w") as f:
             f.write(f"{texthash}\n")
 
-    url = f'https://api.telegram.org/bot{telegram_bot_token}/sendMessage?chat_id={telegram_chatid}&parse_mode=Markdown&text={message}'
-    requests.get(url)
+    url = f'https://api.telegram.org/bot{telegram_bot_token}/sendMessage'
+    try:
+        requests.post(url, data={
+            "chat_id": telegram_chatid,
+            "parse_mode": "Markdown",
+            "text": message
+        }, timeout=10)
+    except Exception as e:
+        logging.error(f"Telegram send error: {e}")
 
 # -----------------------------
-# NEW FUNCTION for leagues list
+# Scrape all leagues
 # -----------------------------
 def scrape_all_leagues():
-    url = "https://www.livescore.com/en/football/"
-    res = requests.get(url)
-    res.encoding = "utf-8"
-    soup = BeautifulSoup(res.text, "html.parser")
+    try:
+        url = "https://www.livescore.com/en/football/"
+        res = requests.get(url, timeout=15)
+        res.encoding = "utf-8"
+        soup = BeautifulSoup(res.text, "html.parser")
 
-    leagues = []
-    for comp in soup.select('div.pi[data-id="sr-cmp-sc"] a'):
-        name = comp.select_one(".yi").get_text(strip=True)
-        link = comp["href"]
-        leagues.append({"name": name, "url": link})
+        leagues = []
+        for comp in soup.select('div.pi[data-id="sr-cmp-sc"] a'):
+            name = comp.select_one(".yi").get_text(strip=True)
+            link = comp["href"]
+            leagues.append({"name": name, "url": link})
 
-    save_json(leagues, os.path.join(DATA_FOLDER, "all_leagues.json"))
-    logging.info(f"Found {len(leagues)} leagues")
-    return leagues
-
+        save_json(leagues, os.path.join(DATA_FOLDER, "all_leagues.json"))
+        logging.info(f"Found {len(leagues)} leagues")
+        return leagues
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ scrape_all_leagues failed:\n{err}")
+        return []
 
 # ----------------------
 # Save JSON helper
@@ -104,44 +97,80 @@ def save_json(content, path):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(content, f, ensure_ascii=False, indent=2)
         logging.info(f"Saved JSON to {path}")
-    except Exception as e:
-        logging.error(f"Error saving JSON to {path}: {e}")
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ save_json failed ({path}):\n{err}")
 
 # ----------------------
 # Scrape today's matches
 # ----------------------
 def scrape_today_matches():
-    today_str = datetime.date.today().strftime('%Y%m%d')
-    url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today_str}/0"
-    res = requests.get(url)
-    res.encoding = 'utf-8'
-    data = res.json()
+    try:
+        today_str = datetime.date.today().strftime('%Y%m%d')
+        url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today_str}/0"
+        res = requests.get(url, timeout=20)
+        res.encoding = 'utf-8'
+        data = res.json()
 
-    # Save schedules JSON
-    save_json(data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
+        save_json(data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
 
-    # Process standings and top scorers
-    for league in data.get("Stages", []):
-        league_id = league.get("Id", None)
-        if not league_id:
-            continue
+        for league in data.get("Stages", []):
+            league_id = league.get("Id")
+            if not league_id:
+                continue
 
-        # Save standings (if available)
-        standings = league.get("Standings", {})
-        if standings:
-            save_json(standings, os.path.join(STANDINGS_FOLDER, f"{league_id}.json"))
+            standings = league.get("Standings", {})
+            if standings:
+                save_json(standings, os.path.join(STANDINGS_FOLDER, f"{league_id}.json"))
 
-        # Save top scorers (if available)
-        top_scorers = league.get("TopScorers", {})
-        if top_scorers:
-            save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
+            top_scorers = league.get("TopScorers", {})
+            if top_scorers:
+                save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ scrape_today_matches failed:\n{err}")
+
+# ----------------------
+# League Scrapers
+# ----------------------
+def scrape_league_fixtures(league_id):
+    try:
+        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/2/fixtures"
+        res = requests.get(url, timeout=20)
+        data = res.json()
+        save_json(data, os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json"))
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ scrape_league_fixtures failed for {league_id}:\n{err}")
+
+def scrape_league_standings(league_id):
+    try:
+        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/1/table"
+        res = requests.get(url, timeout=20)
+        data = res.json()
+        save_json(data, os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json"))
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ scrape_league_standings failed for {league_id}:\n{err}")
+
+def scrape_league_topscorers(league_id):
+    try:
+        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/3/topscorers"
+        res = requests.get(url, timeout=20)
+        data = res.json()
+        save_json(data, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
+    except Exception:
+        err = traceback.format_exc()
+        logging.error(err)
+        sendnotify(f"❌ scrape_league_topscorers failed for {league_id}:\n{err}")
 
 # ----------------------
 # Update today
 # ----------------------
-# remove this line from top of main.py (since you don't use scraper.py anymore):
-# from scraper import scrape_fixtures, scrape_standings, scrape_topscorers
-
 def updateToday():
     global data_store
 
@@ -149,22 +178,17 @@ def updateToday():
     data_store["standings"] = {}
     data_store["top_scorers"] = {}
 
-    # Loop through all leagues
     for league_id, league_name in LEAGUES.items():
         try:
-            # --- Fixtures ---
             fixtures_path = os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json")
             scrape_league_fixtures(league_id)
 
-            # --- Standings ---
             standings_path = os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json")
             scrape_league_standings(league_id)
 
-            # --- Top Scorers ---
             scorers_path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
             scrape_league_topscorers(league_id)
 
-            # Load saved data back into memory
             if os.path.exists(fixtures_path):
                 with open(fixtures_path, "r", encoding="utf-8") as f:
                     data_store["fixtures"].append(json.load(f))
@@ -179,32 +203,21 @@ def updateToday():
 
             logging.info(f"✅ Updated league {league_id} - {league_name}")
 
-        except Exception as e:
-            logging.error(f"❌ Error updating league {league_id}: {e}")
-
-
+        except Exception:
+            err = traceback.format_exc()
+            logging.error(err)
+            sendnotify(f"❌ Error updating league {league_id}:\n{err}")
 
 # ----------------------
-# League Id
+# Example league configuration
 # ----------------------
-
-def scrape_league_fixtures(league_id):
-    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/2/fixtures"
-    res = requests.get(url)
-    data = res.json()
-    save_json(data, os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json"))
-
-def scrape_league_standings(league_id):
-    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/1/table"
-    res = requests.get(url)
-    data = res.json()
-    save_json(data, os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json"))
-
-def scrape_league_topscorers(league_id):
-    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/3/topscorers"
-    res = requests.get(url)
-    data = res.json()
-    save_json(data, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))        
+LEAGUES = {
+    "eng.1": "Premier League",
+    "esp.1": "La Liga",
+    "ita.1": "Serie A",
+    "fra.1": "Ligue 1",
+    "ger.1": "Bundesliga",
+}
 
 # ----------------------
 # Command line execution
@@ -220,7 +233,6 @@ if __name__ == "__main__":
                 time.sleep(300)  # run every 5 minutes
     except KeyboardInterrupt:
         logging.info("Worker stopped manually")
-    except Exception as e:
+    except Exception:
         traceback_str = traceback.format_exc()
-        sendnotify(f"Error in main.py execution:\n{traceback_str}")
-
+        sendnotify(f"❌ Fatal error in main.py:\n{traceback_str}")
