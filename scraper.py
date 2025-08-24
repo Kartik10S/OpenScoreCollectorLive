@@ -78,17 +78,15 @@ def updateToday():
         yesterday_utc = today_utc - datetime.timedelta(days=1)
 
         today_str = today_utc.strftime('%Y%m%d')
-        yesterday_str = yesterday_utc.strftime('%Y%m%d')
+        yesterday_str = yesterday_utc.strftime('%Ym%d')
 
         logging.info(f"Fetching data for {today_str} and {yesterday_str} (UTC)...")
 
         today_data = fetch_data_for_date(today_str)
         yesterday_data = fetch_data_for_date(yesterday_str)
 
-        # Combine stages (leagues and their matches) from both days
         combined_stages = yesterday_data.get("Stages", []) + today_data.get("Stages", [])
         
-        # Use a dictionary to merge leagues by ID, preventing duplicates
         merged_stages_dict = {}
         for stage in combined_stages:
             stage_id = stage.get("Sid")
@@ -98,23 +96,20 @@ def updateToday():
             if stage_id not in merged_stages_dict:
                 merged_stages_dict[stage_id] = stage
             else:
-                # If league exists, merge the events (matches)
                 existing_events = {evt.get("Eid") for evt in merged_stages_dict[stage_id].get("Events", [])}
                 new_events = [evt for evt in stage.get("Events", []) if evt.get("Eid") not in existing_events]
                 merged_stages_dict[stage_id].get("Events", []).extend(new_events)
 
         final_data = {"Stages": list(merged_stages_dict.values())}
 
-        # Save the combined data to today's file path
         save_json(final_data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
 
-        # Extract and save standings and top scorers from the combined data
         for league in final_data.get("Stages", []):
-            league_id = league.get("Cid") # Use Competition ID
+            # --- FIX: Use Sid as a fallback if Cid is missing ---
+            league_id = league.get("Cid") or league.get("Sid")
             if not league_id:
                 continue
 
-            # Find the standings table (usually named "All")
             standings = next((tbl for tbl in league.get("Tables", []) if tbl.get("Lnm") == "All"), None)
             if standings:
                 save_json(standings, os.path.join(STANDINGS_FOLDER, f"{league_id}.json"))
