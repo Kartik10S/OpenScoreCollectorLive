@@ -101,22 +101,18 @@ def save_team_fixture_data():
     Fetches and saves season fixture JSON, but only once per day
     after a specific time (approximating 11:59 AM IST).
     """
-    # Target update time in UTC (11:59 AM IST is ~6:29 AM UTC)
     TARGET_UPDATE_HOUR_UTC = 6
     TARGET_UPDATE_MINUTE_UTC = 29
 
     check_file_path = os.path.join(SEASON_FIXTURES_FOLDER, "arsenal.json")
     now_utc = datetime.datetime.utcnow()
 
-    # If the check file exists, see if we've already updated today
     if os.path.exists(check_file_path):
         file_mod_time_utc = datetime.datetime.utcfromtimestamp(os.path.getmtime(check_file_path))
-        # If the file was modified on the same UTC day, we're done.
         if file_mod_time_utc.date() == now_utc.date():
             logging.info("Season fixtures have already been updated today. Skipping.")
             return
 
-    # If we are here, we haven't updated today. Check if it's time to do so.
     is_time_to_update = (now_utc.hour > TARGET_UPDATE_HOUR_UTC) or \
                         (now_utc.hour == TARGET_UPDATE_HOUR_UTC and now_utc.minute >= TARGET_UPDATE_MINUTE_UTC)
 
@@ -152,10 +148,8 @@ def updateToday():
     """
     logging.info("Starting updateToday process...")
     try:
-        # This will now only download new data once a day
         save_team_fixture_data()
 
-        # --- Existing daily scraper logic ---
         today_utc = datetime.datetime.utcnow().date()
         yesterday_utc = today_utc - datetime.timedelta(days=1)
         today_str = today_utc.strftime('%Y%m%d')
@@ -201,3 +195,7 @@ def updateToday():
         logging.error(f"❌ updateToday failed critically:\n{err}")
         send_telegram_alert(f"❌ updateToday crashed:\n{err}")
         raise
+
+# --- NEW: Make the script runnable from the command line ---
+if __name__ == "__main__":
+    updateToday()
