@@ -30,7 +30,7 @@ TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 # -----------------------------
 CACHE = {}
 CACHE_LOCK = Lock()
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 60  # Cache for 1 minute
 
 def get_cached(key):
     with CACHE_LOCK:
@@ -51,31 +51,41 @@ def clear_cache():
 # -----------------------------
 # Centralized Data Loading and Processing
 # -----------------------------
-def get_today_json_path():
-    """Gets the path for today's main data file."""
-    today_str = datetime.date.today().strftime("%Y%m%d")
-    return os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
+def get_data_file_paths():
+    """Gets the paths for today's and yesterday's main data files."""
+    today_utc = datetime.datetime.utcnow().date()
+    yesterday_utc = today_utc - datetime.timedelta(days=1)
+    today_str = today_utc.strftime("%Y%m%d")
+    yesterday_str = yesterday_utc.strftime("%Y%m%d")
+    return [
+        os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"),
+        os.path.join(SCHEDULES_FOLDER, f"{yesterday_str}.json")
+    ]
 
 def load_and_process_daily_data():
     """
-    Loads the main daily JSON file, processes it into structured data
-    (matches, leagues), and caches the result. This is the single source
-    of truth for all API endpoints.
+    Loads the main daily JSON file(s), processes it into structured data, and caches the result.
+    It checks both today's and yesterday's files to handle timezone overlaps.
     """
     cached_data = get_cached("processed_daily_data")
     if cached_data:
         return cached_data
 
-    path = get_today_json_path()
-    if not os.path.isfile(path):
+    # --- FIX: Check both today's and yesterday's files to find the data ---
+    data = None
+    for path in get_data_file_paths():
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                logging.info(f"Successfully loaded data from {path}")
+                break # Stop after finding the first valid file
+            except (json.JSONDecodeError, FileNotFoundError):
+                logging.warning(f"Could not read or parse {path}, trying next file.")
+                continue
+    
+    if not data:
         raise HTTPException(status_code=503, detail="Data is currently being prepared. Please try again in a minute.")
-
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, FileNotFoundError):
-        raise HTTPException(status_code=503, detail="Data source is temporarily corrupted. An update is in progress.")
-
 
     matches = []
     league_info_list = []
@@ -84,11 +94,10 @@ def load_and_process_daily_data():
 
     for league in data.get("Stages", []):
         league_name = league.get("Snm", "Unknown League")
-        # --- FIX: API now uses the same fallback logic as the scraper ---
         league_id = league.get("Cid") or league.get("Sid")
         league_logo = LEAGUE_LOGOS.get(league_name, "")
 
-        if league_id and league_id not in seen_league_ids:
+        if league_id and league_name and league_id not in seen_league_ids:
             league_info = {"leagueName": league_name, "leagueId": league_id}
             league_info_list.append(league_info)
             league_name_to_id_map[league_name] = league_id
@@ -122,8 +131,11 @@ def load_secondary_data(file_path: str):
     """Generic function to load standings or topscorers JSON files."""
     if not os.path.isfile(file_path):
         return None
-    with open(file_path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(file_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return None
 
 # -----------------------------
 # Background Task
@@ -136,11 +148,11 @@ async def run_update_task():
         clear_cache()
         logging.info("Data update task finished successfully.")
     except Exception as e:
-        logging.error(f"Data update task failed: {e}")
+        logging.error(f"Data update task failed: {e}", exc_info=True)
         send_telegram_alert(f"Background update failed: {e}")
 
 async def scheduled_update_task(interval: int):
-    await asyncio.sleep(10) 
+    await asyncio.sleep(15) 
     while True:
         await run_update_task()
         logging.info(f"Next background update in {interval} seconds.")
@@ -158,12 +170,10 @@ async def startup_event():
 # -----------------------------
 @app.get("/")
 def get_root():
-    """Root endpoint to confirm the API is running."""
     return {"message": "Welcome to the OpenScoreCollector API!"}
 
 @app.get("/api/leagues")
 def get_leagues():
-    """Returns a list of all available leagues for the day."""
     try:
         data = load_and_process_daily_data()
         return data["leagues"]
@@ -173,23 +183,17 @@ def get_leagues():
         logging.error(f"Error in /api/leagues: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
-
 @app.get("/api/scores")
 @app.get("/api/fixtures")
 def get_scores_and_fixtures():
     try:
         data = load_and_process_daily_data()
         all_matches = data["matches"]
-        
         live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
         fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
-
         return {"live": live_scores, "fixtures": fixtures, "all": all_matches}
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/scores: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/standings/{league_name}")
 def get_standings(league_name: str):
@@ -199,20 +203,17 @@ def get_standings(league_name: str):
         
         league_id = processed_data["league_map"].get(decoded_league_name)
         if not league_id:
-            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found for today.")
+            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found in today's data.")
 
         path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
         data = load_secondary_data(path)
         
         if data is None:
-            raise HTTPException(status_code=404, detail="Standings data file not found for this league.")
+            raise HTTPException(status_code=404, detail="Standings data file not found for this league. It may not be available from the source.")
         
         return data.get("Tables", [])
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/standings/{league_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/topscorers/{league_name}")
 def get_top_scorers(league_name: str):
@@ -222,25 +223,20 @@ def get_top_scorers(league_name: str):
 
         league_id = processed_data["league_map"].get(decoded_league_name)
         if not league_id:
-            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found for today.")
+            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found in today's data.")
 
         path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
         data = load_secondary_data(path)
 
         if data is None:
-            raise HTTPException(status_code=404, detail="Top scorers data file not found for this league.")
+            raise HTTPException(status_code=404, detail="Top scorers data file not found for this league. It may not be available from the source.")
 
         return data.get("Players", [])
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/topscorers/{league_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
-
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
-    """Manually triggers a background update of the data."""
     logging.info("Manual update triggered via API.")
     background_tasks.add_task(run_update_task)
     return JSONResponse(content={"status": "success", "message": "Update process started in the background."}, status_code=202)
