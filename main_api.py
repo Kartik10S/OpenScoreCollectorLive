@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from main import updateToday  # OpenScoreCollector scraper
 from threading import Lock
 import time
+from logos import TEAM_LOGOS, LEAGUE_LOGOS
 
 # -----------------------------
 # Paths
@@ -173,12 +174,28 @@ def get_scores():
 
 @app.get("/api/fixtures")
 def get_fixtures():
-    cached = get_cached("fixtures")
-    if cached:
-        return cached
-    matches = load_matches_from_json(get_today_json_path())
-    set_cache("fixtures", matches)
-    return matches
+    fixtures = []
+    for file in os.listdir(FIXTURES_FOLDER):
+        if file.endswith(".json"):
+            path = os.path.join(FIXTURES_FOLDER, file)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                for match in data:
+                    league_name = match.get("leagueName", "")
+                    match["leagueLogoUrl"] = LEAGUE_LOGOS.get(league_name, "")
+
+                    # Replace team logos
+                    home = match.get("homeTeamName", "")
+                    away = match.get("awayTeamName", "")
+                    match["homeTeamLogoUrl"] = TEAM_LOGOS.get(home, "")
+                    match["awayTeamLogoUrl"] = TEAM_LOGOS.get(away, "")
+
+                    fixtures.append(match)
+            except Exception as e:
+                logging.error(f"Error reading fixtures {file}: {e}")
+    return fixtures
 
 @app.get("/api/match/{match_id}")
 def get_match_detail(match_id: str):
@@ -202,6 +219,16 @@ def get_standings_endpoint(league_id: str):
     set_cache(key, data)
     return data
 
+@app.get("/api/standings")
+def get_all_standings():
+    """Return standings for all leagues"""
+    all_standings = {}
+    for file in os.listdir(STANDINGS_FOLDER):
+        if file.endswith(".json") and not file.endswith("_topscorers.json"):
+            league_id = file.replace(".json", "")
+            all_standings[league_id] = load_standings(league_id)
+    return all_standings
+
 @app.get("/api/topscorers/{league_id}")
 def get_top_scorers_endpoint(league_id: str):
     key = f"topscorers_{league_id}"
@@ -211,6 +238,46 @@ def get_top_scorers_endpoint(league_id: str):
     data = load_top_scorers(league_id)
     set_cache(key, data)
     return data
+
+@app.get("/api/topscorers")
+def get_all_top_scorers():
+    """Return top scorers for all leagues"""
+    all_scorers = {}
+    for file in os.listdir(STANDINGS_FOLDER):
+        if file.endswith("_topscorers.json"):
+            league_id = file.replace("_topscorers.json", "")
+            all_scorers[league_id] = load_top_scorers(league_id)
+    return all_scorers
+
+
+@app.get("/api/leagues")
+def get_available_leagues():
+    """Return all available leagues with ID, name, and logo if available."""
+    leagues = {}
+
+    for file in os.listdir(STANDINGS_FOLDER):
+        if file.endswith(".json") and not file.endswith("_topscorers.json"):
+            league_id = file.replace(".json", "")
+            path = os.path.join(STANDINGS_FOLDER, file)
+
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+
+                leagues[league_id] = {
+                    "leagueId": league_id,
+                    "leagueName": data.get("leagueName", f"League {league_id}"),
+                    "leagueLogoUrl": data.get("leagueLogoUrl", "")
+                }
+            except Exception as e:
+                logging.error(f"Error reading league file {file}: {e}")
+                leagues[league_id] = {
+                    "leagueId": league_id,
+                    "leagueName": f"League {league_id}",
+                    "leagueLogoUrl": ""
+                }
+
+    return {"leagues": list(leagues.values())}
 
 # -----------------------------
 # Background Updater (Optional)
