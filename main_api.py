@@ -220,6 +220,17 @@ def get_top_scorers_endpoint(league_id: str):
     set_cache(key, data)
     return data
 
+@app.route("/api/update", methods=["POST", "GET"])
+def update_data():
+    """Manually refresh fixtures and standings for all leagues"""
+    try:
+        fetch_and_store_fixtures()
+        fetch_and_store_standings()
+        return jsonify({"status": "success", "message": "Data updated"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
 # -----------------------------
 # Background Updater (Optional)
 # -----------------------------
