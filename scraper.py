@@ -4,7 +4,6 @@ import datetime
 import logging
 import requests
 import traceback
-from bs4 import BeautifulSoup
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -18,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
-TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers") # Corrected path
+TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
@@ -78,7 +77,8 @@ def updateToday():
         yesterday_utc = today_utc - datetime.timedelta(days=1)
 
         today_str = today_utc.strftime('%Y%m%d')
-        yesterday_str = yesterday_utc.strftime('%Ym%d')
+        # --- FIX: Corrected the date format string for yesterday ---
+        yesterday_str = yesterday_utc.strftime('%Y%m%d')
 
         logging.info(f"Fetching data for {today_str} and {yesterday_str} (UTC)...")
 
@@ -105,7 +105,6 @@ def updateToday():
         save_json(final_data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
 
         for league in final_data.get("Stages", []):
-            # --- FIX: Use Sid as a fallback if Cid is missing ---
             league_id = league.get("Cid") or league.get("Sid")
             if not league_id:
                 continue
