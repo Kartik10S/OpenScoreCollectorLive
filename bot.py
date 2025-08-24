@@ -2,15 +2,14 @@ import requests
 import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from config import telegram_bot_token # Import token from config
 
-TOKEN = "8321486230:AAExOi_IummpRegMHkCpN5Fdz2ojgRY7YQs"  # your bot token
-API_BASE = "https://your-cloud-run-url"  # or http://127.0.0.1:8000 for local testing
-SCORES_URL = f"{API_BASE}/api/scores"
-FIXTURES_URL = f"{API_BASE}/api/fixtures"
+# Use your Heroku app URL here
+API_BASE = "https://opencollector-live-5e8aab08da77.herokuapp.com" 
+API_URL = f"{API_BASE}/api/scores" # Use the unified endpoint
 
 # Cache to store latest API data
-latest_scores = []
-latest_fixtures = []
+latest_data = {}
 
 # -----------------------------
 # Helper
@@ -37,46 +36,47 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not latest_scores:
+    live_matches = latest_data.get("live", [])
+    if not live_matches:
         await update.message.reply_text("No live matches right now.")
         return
     lines = [fmt_row(m["homeTeamName"], m["awayTeamName"], m["homeScore"], m["awayScore"], m["matchStatus"])
-             for m in latest_scores[:10]]
+             for m in live_matches[:10]]
     await update.message.reply_text("Live Scores:\n" + "\n".join(lines))
 
 async def matches(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not latest_fixtures:
+    fixtures = latest_data.get("fixtures", [])
+    if not fixtures:
         await update.message.reply_text("No fixtures available right now.")
         return
     lines = [fmt_row(m["homeTeamName"], m["awayTeamName"], m["homeScore"], m["awayScore"], m["matchStatus"])
-             for m in latest_fixtures[:10]]
+             for m in fixtures[:10]]
     await update.message.reply_text("Today’s Fixtures:\n" + "\n".join(lines))
 
 # -----------------------------
-# Background updater
+# Background updater for the bot
 # -----------------------------
 async def update_loop():
-    global latest_scores, latest_fixtures
+    global latest_data
     while True:
         try:
-            r1 = requests.get(SCORES_URL, timeout=10)
-            r1.raise_for_status()
-            latest_scores = r1.json()
-
-            r2 = requests.get(FIXTURES_URL, timeout=10)
-            r2.raise_for_status()
-            latest_fixtures = r2.json()
-
-            print(f"Updated scores and fixtures at {asyncio.get_event_loop().time()}")
+            r = requests.get(API_URL, timeout=15)
+            r.raise_for_status()
+            latest_data = r.json()
+            print(f"Bot updated data at {asyncio.get_event_loop().time()}")
         except Exception as e:
-            print(f"Error fetching updates: {e}")
-        await asyncio.sleep(300)  # every 5 minutes, matches API cache
+            print(f"Bot error fetching updates: {e}")
+        await asyncio.sleep(60)  # Update bot data every minute
 
 # -----------------------------
 # Main
 # -----------------------------
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    if not telegram_bot_token or telegram_bot_token == "YOUR_BOT_TOKEN_HERE":
+        print("Telegram bot token not configured. Exiting.")
+        return
+
+    app = ApplicationBuilder().token(telegram_bot_token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("live", live))
