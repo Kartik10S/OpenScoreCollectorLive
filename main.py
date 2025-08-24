@@ -41,6 +41,26 @@ def sendnotify(message):
     url = f'https://api.telegram.org/bot{telegram_bot_token}/sendMessage?chat_id={telegram_chatid}&parse_mode=Markdown&text={message}'
     requests.get(url)
 
+# -----------------------------
+# NEW FUNCTION for leagues list
+# -----------------------------
+def scrape_all_leagues():
+    url = "https://www.livescore.com/en/football/"
+    res = requests.get(url)
+    res.encoding = "utf-8"
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    leagues = []
+    for comp in soup.select('div.pi[data-id="sr-cmp-sc"] a'):
+        name = comp.select_one(".yi").get_text(strip=True)
+        link = comp["href"]
+        leagues.append({"name": name, "url": link})
+
+    save_json(leagues, os.path.join(DATA_FOLDER, "all_leagues.json"))
+    logging.info(f"Found {len(leagues)} leagues")
+    return leagues
+
+
 # ----------------------
 # Save JSON helper
 # ----------------------
@@ -86,35 +106,76 @@ def scrape_today_matches():
 # ----------------------
 def updateToday():
     try:
+        # Always scrape today's matches first
         scrape_today_matches()
-        logging.info("Today's matches, standings, and top scorers updated.")
+
+        # Known league IDs mapping
+        league_ids = {
+            "premier-league": "195",   # England
+            "laliga": "176",           # Spain
+            "serie-a": "188",          # Italy
+            "bundesliga": "177",       # Germany
+            "ligue-1": "180",          # France
+            # Add more leagues here if needed
+            # "champions-league": "262",
+            # "europa-league": "263"
+        }
+
+        # Get all leagues (from scraper)
+        leagues = scrape_all_leagues()
+        for league in leagues:
+            league_slug = league["url"].strip("/").split("/")[-1]
+
+            if league_slug in league_ids:
+                lid = league_ids[league_slug]
+
+                scrape_league_fixtures(lid)
+                scrape_league_standings(lid)
+                scrape_league_topscorers(lid)
+
+        logging.info("✅ Updated matches, standings, fixtures, and top scorers for all tracked leagues.")
     except Exception as e:
         traceback_str = traceback.format_exc()
         logging.error(f"Error in updateToday: {traceback_str}")
-        sendnotify(f"Error in main.py updateToday:\n{traceback_str}")
+        sendnotify(f"Error in updateToday:\n{traceback_str}")
+
+# ----------------------
+# League Id
+# ----------------------
+
+def scrape_league_fixtures(league_id):
+    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/2/fixtures"
+    res = requests.get(url)
+    data = res.json()
+    save_json(data, os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json"))
+
+def scrape_league_standings(league_id):
+    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/1/table"
+    res = requests.get(url)
+    data = res.json()
+    save_json(data, os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json"))
+
+def scrape_league_topscorers(league_id):
+    url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/3/topscorers"
+    res = requests.get(url)
+    data = res.json()
+    save_json(data, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))        
 
 # ----------------------
 # Command line execution
 # ----------------------
 if __name__ == "__main__":
+    import time
     try:
         if len(sys.argv) > 1 and sys.argv[1] == 'updatetoday':
             updateToday()
         else:
-            print("Usage: python main.py updatetoday")
-    except Exception as e:
-        traceback_str = traceback.format_exc()
-        sendnotify(f"Error in main.py execution:\n{traceback_str}")
-
-# Add at the end of main.py
-if __name__ == "__main__":
-    import time
-    try:
-        while True:
-            updateToday()
-            time.sleep(300)  # run every 5 minutes
+            while True:
+                updateToday()
+                time.sleep(300)  # run every 5 minutes
     except KeyboardInterrupt:
         logging.info("Worker stopped manually")
     except Exception as e:
         traceback_str = traceback.format_exc()
-        sendnotify(f"Error in long-running worker:\n{traceback_str}")
+        sendnotify(f"Error in main.py execution:\n{traceback_str}")
+
