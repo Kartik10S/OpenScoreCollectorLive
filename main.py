@@ -9,7 +9,6 @@ import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
 from bs4 import BeautifulSoup
-from scraper import scrape_league_fixtures, scrape_league_standings, scrape_league_topscorers
 from main_api import LEAGUES, send_telegram_alert   # reuse LEAGUES + alert function
 
 # ----------------------
@@ -26,6 +25,36 @@ data_store = {
     "top_scorers": {},
     "matches": []
 }
+
+
+
+# --- Scraper functions (basic stubs for now) ---
+def scrape_league_fixtures(league_id):
+    try:
+        url = f"https://www.espn.com/soccer/fixtures/_/league/{league_id}"
+        # TODO: implement scraping logic (currently returns empty list)
+        return []
+    except Exception as e:
+        logging.error(f"❌ scrape_league_fixtures failed for {league_id}: {e}")
+        return []
+
+def scrape_league_standings(league_id):
+    try:
+        url = f"https://www.espn.com/soccer/standings/_/league/{league_id}"
+        # TODO: implement scraping logic (currently returns empty dict)
+        return {}
+    except Exception as e:
+        logging.error(f"❌ scrape_league_standings failed for {league_id}: {e}")
+        return {}
+
+def scrape_league_topscorers(league_id):
+    try:
+        url = f"https://www.espn.com/soccer/stats/_/league/{league_id}"
+        # TODO: implement scraping logic (currently returns empty dict)
+        return {}
+    except Exception as e:
+        logging.error(f"❌ scrape_league_topscorers failed for {league_id}: {e}")
+        return {}
 
 # ----------------------
 # Folder setup
