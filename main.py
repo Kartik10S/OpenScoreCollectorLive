@@ -10,6 +10,8 @@ import traceback
 from config import telegram_bot_token, telegram_chatid
 from bs4 import BeautifulSoup
 from main_api import LEAGUES, send_telegram_alert   # reuse LEAGUES + alert function
+from bs4 import BeautifulSoup
+from flask import Flask, jsonify, request
 
 # ----------------------
 # Setup logging
@@ -25,7 +27,6 @@ data_store = {
     "top_scorers": {},
     "matches": []
 }
-
 
 # ----------------------
 # Folder setup
@@ -137,9 +138,29 @@ def scrape_today_matches():
 # ----------------------
 # League Scrapers
 # ----------------------
-import requests
-from bs4 import BeautifulSoup
-import datetime
+
+app = Flask(__name__)
+
+@app.route("/api/update", methods=["POST"])
+def api_update():
+    try:
+        updateToday()  # make sure this is imported or defined above
+        return jsonify({"status": "success", "message": "Fixtures updated"}), 200
+    except Exception as e:
+        logging.exception("Update failed")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/api/fixtures", methods=["GET"])
+def api_fixtures():
+    return jsonify(data_store.get("fixtures", []))
+
+@app.route("/api/standings", methods=["GET"])
+def api_standings():
+    return jsonify(data_store.get("standings", {}))
+
+@app.route("/api/topscorers", methods=["GET"])
+def api_topscorers():
+    return jsonify(data_store.get("top_scorers", {}))
 
 # --- Scraper: Fixtures ---
 def scrape_league_fixtures(league_id):
