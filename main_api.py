@@ -7,11 +7,11 @@ import asyncio
 import time
 from fastapi import FastAPI
 import requests   # ✅ for Telegram alerts
-from config import telegram_bot_token, telegram_chatid   # ✅ load creds
+from config import telegram_bot_token, telegram_chatid
 from fastapi.responses import JSONResponse
-from main import updateToday  # OpenScoreCollector scraper
+from main import updateToday
 from threading import Lock
-from logos import TEAM_LOGOS, LEAGUE_LOGOS  # ✅ Import logos
+from logos import TEAM_LOGOS, LEAGUE_LOGOS
 
 
 # -----------------------------
@@ -26,17 +26,6 @@ def send_telegram_alert(message: str):
     except Exception as e:
         logging.error(f"Failed to send Telegram alert: {e}")
 
-# -----------------------------
-# League Config (for updateToday)
-# -----------------------------
-LEAGUES = {
-    "eng.1": "Premier League",
-    "esp.1": "La Liga",
-    "ita.1": "Serie A",
-    "fra.1": "Ligue 1",
-    "ger.1": "Bundesliga",
-    # Add more leagues as needed
-}
 
 # -----------------------------
 # Paths
@@ -48,12 +37,14 @@ STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 
+
 # -----------------------------
 # Logging
 # -----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 app = FastAPI(title="OpenScoreCollector API")
+
 
 # -----------------------------
 # Cache Setup
@@ -62,18 +53,19 @@ CACHE = {}
 CACHE_LOCK = Lock()
 CACHE_TTL = 300  # 5 minutes in seconds
 
+
 def get_cached(key):
-    """Return cached data if not expired."""
     with CACHE_LOCK:
         entry = CACHE.get(key)
         if entry and (time.time() - entry["time"]) < CACHE_TTL:
             return entry["data"]
     return None
 
+
 def set_cache(key, data):
-    """Set cache entry."""
     with CACHE_LOCK:
         CACHE[key] = {"data": data, "time": time.time()}
+
 
 # -----------------------------
 # Helper Functions
@@ -81,6 +73,7 @@ def set_cache(key, data):
 def get_today_json_path():
     today_str = datetime.date.today().strftime("%Y%m%d")
     return os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
+
 
 def load_matches_from_json(path: str):
     if not os.path.isfile(path):
@@ -92,8 +85,7 @@ def load_matches_from_json(path: str):
 
     matches = []
 
-    # ESPN data structure (saved in updateToday)
-    for league in data.get("Stages", []):  # we wrapped events under Stages in updateToday
+    for league in data.get("Stages", []):
         league_name = league.get("Snm", "Unknown League")
         league_logo = LEAGUE_LOGOS.get(league_name, "")
 
@@ -134,12 +126,14 @@ def load_matches_from_json(path: str):
 
     return matches
 
+
 def load_match_by_id(match_id: str):
     matches = load_matches_from_json(get_today_json_path())
     for match in matches:
         if str(match.get("matchId")) == str(match_id):
             return match
     return None
+
 
 def load_standings(league_id: str):
     path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
@@ -150,6 +144,7 @@ def load_standings(league_id: str):
         data = json.load(f)
     return data.get("teams", [])
 
+
 def load_top_scorers(league_id: str):
     path = os.path.join(STANDINGS_FOLDER, f"{league_id}_topscorers.json")
     if not os.path.isfile(path):
@@ -159,8 +154,9 @@ def load_top_scorers(league_id: str):
         data = json.load(f)
     return data.get("players", [])
 
+
 # -----------------------------
-# API Endpoints with Cache
+# API Endpoints
 # -----------------------------
 @app.get("/api/scores")
 def get_scores():
@@ -171,6 +167,7 @@ def get_scores():
     set_cache("scores", matches)
     return matches
 
+
 @app.get("/api/fixtures")
 def get_fixtures():
     cached = get_cached("fixtures")
@@ -179,6 +176,7 @@ def get_fixtures():
     matches = load_matches_from_json(get_today_json_path())
     set_cache("fixtures", matches)
     return matches
+
 
 @app.get("/api/match/{match_id}")
 def get_match_detail(match_id: str):
@@ -192,6 +190,7 @@ def get_match_detail(match_id: str):
         return match
     return {"error": "Match not found"}
 
+
 @app.get("/api/standings/{league_id}")
 def get_standings_endpoint(league_id: str):
     key = f"standings_{league_id}"
@@ -201,6 +200,7 @@ def get_standings_endpoint(league_id: str):
     data = load_standings(league_id)
     set_cache(key, data)
     return data
+
 
 @app.get("/api/topscorers/{league_id}")
 def get_top_scorers_endpoint(league_id: str):
@@ -212,8 +212,9 @@ def get_top_scorers_endpoint(league_id: str):
     set_cache(key, data)
     return data
 
+
 # -----------------------------
-# Update Endpoint (Fixed ✅)
+# Update Endpoint (with refresh ✅)
 # -----------------------------
 @app.post("/api/update")
 def update():
@@ -221,14 +222,23 @@ def update():
         logging.info("Running updateToday()...")
         updateToday()
         logging.info("Fixtures updated successfully")
+
+        # ✅ clear + refresh all caches immediately
+        with CACHE_LOCK:
+            CACHE.clear()
+        matches = load_matches_from_json(get_today_json_path())
+        set_cache("fixtures", matches)
+        set_cache("scores", matches)
+
         return JSONResponse(content={"status": "success", "message": "Fixtures updated"}, status_code=200)
     except Exception as e:
         logging.error(f"Error in /api/update: {e}", exc_info=True)
-        send_telegram_alert(str(e))   # ✅ send Telegram alert
+        send_telegram_alert(str(e))
         return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
+
 # -----------------------------
-# Background Updater (Optional)
+# Background Updater
 # -----------------------------
 async def schedule_updates(interval: int = 300):
     while True:
@@ -237,12 +247,27 @@ async def schedule_updates(interval: int = 300):
             logging.info("Updated today's matches in background")
             with CACHE_LOCK:
                 CACHE.clear()
+            matches = load_matches_from_json(get_today_json_path())
+            set_cache("fixtures", matches)
+            set_cache("scores", matches)
         except Exception as e:
             logging.error(f"Background update error: {e}")
-            send_telegram_alert(f"Background update failed: {e}")  # ✅ alert Telegram
+            send_telegram_alert(f"Background update failed: {e}")
         await asyncio.sleep(interval)
+
 
 @app.on_event("startup")
 async def startup_event():
+    try:
+        logging.info("Running initial update on startup...")
+        updateToday()  # ✅ ensure data exists
+        matches = load_matches_from_json(get_today_json_path())
+        set_cache("fixtures", matches)
+        set_cache("scores", matches)
+        logging.info("Initial fixtures loaded successfully")
+    except Exception as e:
+        logging.error(f"Startup update failed: {e}")
+        send_telegram_alert(f"Startup update failed: {e}")
+
     asyncio.create_task(schedule_updates())
     logging.info("Background updater started (5-min interval)")
