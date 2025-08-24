@@ -25,17 +25,6 @@ os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 os.makedirs(TOPSCORERS_FOLDER, exist_ok=True)
 
 # -----------------------------
-# League Configuration
-# -----------------------------
-LEAGUES = {
-    "eng.1": "Premier League",
-    "esp.1": "La Liga",
-    "ita.1": "Serie A",
-    "fra.1": "Ligue 1",
-    "ger.1": "Bundesliga",
-}
-
-# -----------------------------
 # Telegram Alerting
 # -----------------------------
 def send_telegram_alert(message: str):
@@ -64,28 +53,68 @@ def save_json(content, path):
         logging.error(err)
         send_telegram_alert(f"❌ save_json failed ({os.path.basename(path)}):\n{err}")
 
-# -----------------------------
-# Scrapers
-# -----------------------------
-def scrape_today_matches():
-    """Fetches today's match data from the livescore API and saves it."""
+def fetch_data_for_date(date_str):
+    """Fetches soccer data for a specific date string (YYYYMMDD)."""
     try:
-        today_str = datetime.date.today().strftime('%Y%m%d')
-        # This is a more direct API endpoint for daily soccer data
-        url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{today_str}/0"
+        url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{date_str}/0"
         res = requests.get(url, timeout=20)
         res.raise_for_status()
-        data = res.json()
+        return res.json()
+    except requests.RequestException as e:
+        logging.error(f"Failed to fetch data for date {date_str}: {e}")
+        return {} # Return empty dict on failure
 
-        # Save the main schedule file for the day
-        save_json(data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
+# -----------------------------
+# Main Scraper Logic
+# -----------------------------
+def updateToday():
+    """
+    Scrapes data for the current and previous UTC day to ensure a full
+    24-hour window of matches, handling timezone differences.
+    """
+    logging.info("Starting updateToday process...")
+    try:
+        today_utc = datetime.datetime.utcnow().date()
+        yesterday_utc = today_utc - datetime.timedelta(days=1)
 
-        # Extract and save standings and top scorers for each league found in the data
-        for league in data.get("Stages", []):
+        today_str = today_utc.strftime('%Y%m%d')
+        yesterday_str = yesterday_utc.strftime('%Y%m%d')
+
+        logging.info(f"Fetching data for {today_str} and {yesterday_str} (UTC)...")
+
+        today_data = fetch_data_for_date(today_str)
+        yesterday_data = fetch_data_for_date(yesterday_str)
+
+        # Combine stages (leagues and their matches) from both days
+        combined_stages = yesterday_data.get("Stages", []) + today_data.get("Stages", [])
+        
+        # Use a dictionary to merge leagues by ID, preventing duplicates
+        merged_stages_dict = {}
+        for stage in combined_stages:
+            stage_id = stage.get("Sid")
+            if not stage_id:
+                continue
+            
+            if stage_id not in merged_stages_dict:
+                merged_stages_dict[stage_id] = stage
+            else:
+                # If league exists, merge the events (matches)
+                existing_events = {evt.get("Eid") for evt in merged_stages_dict[stage_id].get("Events", [])}
+                new_events = [evt for evt in stage.get("Events", []) if evt.get("Eid") not in existing_events]
+                merged_stages_dict[stage_id].get("Events", []).extend(new_events)
+
+        final_data = {"Stages": list(merged_stages_dict.values())}
+
+        # Save the combined data to today's file path
+        save_json(final_data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
+
+        # Extract and save standings and top scorers from the combined data
+        for league in final_data.get("Stages", []):
             league_id = league.get("Cid") # Use Competition ID
             if not league_id:
                 continue
 
+            # Find the standings table (usually named "All")
             standings = next((tbl for tbl in league.get("Tables", []) if tbl.get("Lnm") == "All"), None)
             if standings:
                 save_json(standings, os.path.join(STANDINGS_FOLDER, f"{league_id}.json"))
@@ -93,19 +122,9 @@ def scrape_today_matches():
             top_scorers = league.get("TopScorers")
             if top_scorers:
                 save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
-        logging.info("Successfully scraped and saved today's matches, standings, and top scorers.")
-    except Exception:
-        err = traceback.format_exc()
-        logging.error(err)
-        send_telegram_alert(f"❌ scrape_today_matches failed:\n{err}")
+        
+        logging.info("✅ updateToday process completed successfully with merged data.")
 
-def updateToday():
-    """Main function to trigger the scraping for today."""
-    logging.info("Starting updateToday process...")
-    try:
-        # The single API call now handles fixtures, standings, and top scorers
-        scrape_today_matches()
-        logging.info("✅ updateToday process completed successfully.")
     except Exception:
         err = traceback.format_exc()
         logging.error(f"❌ updateToday failed critically:\n{err}")
