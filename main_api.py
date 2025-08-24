@@ -76,28 +76,47 @@ def load_matches_from_json(path: str):
         data = json.load(f)
 
     matches = []
-    for league in data.get("Stages", []):
-        league_name = league.get("Snm", "Unknown League")
-        league_logo = LEAGUE_LOGOS.get(league_name, league.get("img", ""))  # ✅ Attach logo
 
-        for match in league.get("Events", []):
-            home_name = match.get("T1", [{}])[0].get("Nm", "Home")
-            away_name = match.get("T2", [{}])[0].get("Nm", "Away")
+    # ESPN data structure (saved in updateToday)
+    for league in data.get("Stages", []):  # we wrapped events under Stages in updateToday
+        league_name = league.get("Snm", "Unknown League")
+        league_logo = LEAGUE_LOGOS.get(league_name, "")
+
+        for event in league.get("Events", []):
+            competitions = event.get("competitions", [])
+            if not competitions:
+                continue
+
+            comp = competitions[0]
+            competitors = comp.get("competitors", [])
+
+            home_team, away_team = {}, {}
+            home_score = away_score = None
+
+            if len(competitors) == 2:
+                for c in competitors:
+                    if c.get("homeAway") == "home":
+                        home_team = c.get("team", {})
+                        home_score = c.get("score", None)
+                    else:
+                        away_team = c.get("team", {})
+                        away_score = c.get("score", None)
 
             matches.append({
                 "leagueName": league_name,
                 "leagueLogoUrl": league_logo,
-                "stadium": match.get("Stadium", ""),
-                "homeTeamName": home_name,
-                "homeTeamLogoUrl": TEAM_LOGOS.get(home_name, match.get("T1img", "")),
-                "awayTeamName": away_name,
-                "awayTeamLogoUrl": TEAM_LOGOS.get(away_name, match.get("T2img", "")),
-                "matchTime": match.get("Eps", "Not Started"),
-                "matchStatus": match.get("Eps", "Not Started"),
-                "homeScore": match.get("Tr1", None),
-                "awayScore": match.get("Tr2", None),
-                "matchId": match.get("Id", None)
+                "stadium": comp.get("venue", {}).get("fullName", ""),
+                "homeTeamName": home_team.get("displayName", "Home"),
+                "homeTeamLogoUrl": TEAM_LOGOS.get(home_team.get("displayName", ""), home_team.get("logo", "")),
+                "awayTeamName": away_team.get("displayName", "Away"),
+                "awayTeamLogoUrl": TEAM_LOGOS.get(away_team.get("displayName", ""), away_team.get("logo", "")),
+                "matchTime": event.get("status", {}).get("type", {}).get("shortDetail", ""),
+                "matchStatus": event.get("status", {}).get("type", {}).get("state", "pre"),
+                "homeScore": home_score,
+                "awayScore": away_score,
+                "matchId": event.get("id")
             })
+
     return matches
 
 def load_match_by_id(match_id: str):
