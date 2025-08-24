@@ -220,19 +220,20 @@ def get_top_scorers_endpoint(league_id: str):
     set_cache(key, data)
     return data
 
+
 @app.route('/api/update', methods=['POST'])
-def update_data():
+def update():
     try:
+        print("Running updateToday()...")  # Debug log
         updateToday()
-        return jsonify({"status": "success", "message": "Data updated"}), 200
+        print("Fixtures updated successfully")
+        return jsonify({"status": "success", "message": "Fixtures updated"}), 200
     except Exception as e:
         import traceback
-        error_details = traceback.format_exc()
-        return jsonify({
-            "status": "error",
-            "message": str(e),
-            "traceback": error_details
-        }), 500
+        print("Error in /api/update:", e)
+        traceback.print_exc()  # full error trace in logs
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 
