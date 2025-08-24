@@ -105,39 +105,33 @@ def scrape_today_matches():
 # Update today
 # ----------------------
 def updateToday():
-    try:
-        # Always scrape today's matches first
-        scrape_today_matches()
+    global data_store
 
-        # Known league IDs mapping
-        league_ids = {
-            "premier-league": "195",   # England
-            "laliga": "176",           # Spain
-            "serie-a": "188",          # Italy
-            "bundesliga": "177",       # Germany
-            "ligue-1": "180",          # France
-            # Add more leagues here if needed
-            # "champions-league": "262",
-            # "europa-league": "263"
-        }
+    data_store["fixtures"] = []
+    data_store["standings"] = {}
+    data_store["top_scorers"] = {}
 
-        # Get all leagues (from scraper)
-        leagues = scrape_all_leagues()
-        for league in leagues:
-            league_slug = league["url"].strip("/").split("/")[-1]
+    # Loop through all leagues
+    for league_id, league_info in LEAGUES.items():
+        try:
+            # --- Fixtures ---
+            fixtures = scrape_fixtures(league_id)
+            if fixtures:
+                data_store["fixtures"].extend(fixtures)
 
-            if league_slug in league_ids:
-                lid = league_ids[league_slug]
+            # --- Standings ---
+            standings = scrape_standings(league_id)
+            if standings:
+                data_store["standings"][league_id] = standings
 
-                scrape_league_fixtures(lid)
-                scrape_league_standings(lid)
-                scrape_league_topscorers(lid)
+            # --- Top Scorers ---
+            scorers = scrape_top_scorers(league_id)
+            if scorers:
+                data_store["top_scorers"][league_id] = scorers
 
-        logging.info("✅ Updated matches, standings, fixtures, and top scorers for all tracked leagues.")
-    except Exception as e:
-        traceback_str = traceback.format_exc()
-        logging.error(f"Error in updateToday: {traceback_str}")
-        sendnotify(f"Error in updateToday:\n{traceback_str}")
+        except Exception as e:
+            print(f"Error updating league {league_id}: {e}")
+
 
 # ----------------------
 # League Id
