@@ -8,7 +8,8 @@ import requests
 import hashlib
 import traceback
 from config import telegram_bot_token, telegram_chatid
-from utils import sendnotify, updateToday  # move helper funcs to utils if you prefer
+import logging, os, sys, json, traceback
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
