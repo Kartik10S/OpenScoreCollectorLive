@@ -4,7 +4,7 @@ import datetime
 import logging
 import asyncio
 import time
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from threading import Lock
 from scraper import updateToday, send_telegram_alert # Import from scraper
@@ -58,8 +58,6 @@ def load_matches_from_json():
     path = get_today_json_path()
     if not os.path.isfile(path):
         logging.warning(f"No JSON file found at {path}. Triggering update.")
-        # If file doesn't exist, run a scrape to create it.
-        # This is a blocking call, but should only happen once if the file is missing.
         try:
             updateToday()
         except Exception as e:
@@ -78,22 +76,30 @@ def load_matches_from_json():
             home_team_data = event.get("T1", [{}])[0]
             away_team_data = event.get("T2", [{}])[0]
             scores = event.get("Tr1"), event.get("Tr2")
-            status_info = event.get("Eps") # e.g., "FT", "HT", "45'"
+            status_info = event.get("Eps")
 
             matches.append({
                 "leagueName": league_name,
+                "leagueId": league.get("Cid"), # Include league ID
                 "leagueLogoUrl": league_logo,
                 "homeTeamName": home_team_data.get("Nm", "Home"),
                 "homeTeamLogoUrl": TEAM_LOGOS.get(home_team_data.get("Nm", ""), ""),
                 "awayTeamName": away_team_data.get("Nm", "Away"),
                 "awayTeamLogoUrl": TEAM_LOGOS.get(away_team_data.get("Nm", ""), ""),
-                "matchTime": event.get("Esd"), # Start time timestamp
+                "matchTime": event.get("Esd"),
                 "matchStatus": status_info,
                 "homeScore": scores[0],
                 "awayScore": scores[1],
                 "matchId": event.get("Eid")
             })
     return matches
+
+def load_data_from_json(file_path: str):
+    """Generic function to load data from a JSON file."""
+    if not os.path.isfile(file_path):
+        return None
+    with open(file_path, encoding="utf-8") as f:
+        return json.load(f)
 
 # -----------------------------
 # Background Task
@@ -115,14 +121,10 @@ async def scheduled_update_task(interval: int):
 async def startup_event():
     """On startup, create the first data file and start the background task."""
     logging.info("Application startup...")
-    # Run initial update in the background to not block startup
-    # This ensures the app starts fast, and data becomes available shortly after.
     initial_update_task = asyncio.create_task(asyncio.to_thread(updateToday))
-    # Start the recurring background task
     asyncio.create_task(scheduled_update_task(interval=300))
-    await initial_update_task # Wait for the first update to complete
+    await initial_update_task
     logging.info("Initial data loaded and background updater started.")
-
 
 # -----------------------------
 # API Endpoints
@@ -130,21 +132,57 @@ async def startup_event():
 @app.get("/api/scores")
 @app.get("/api/fixtures")
 def get_scores_and_fixtures():
-    cached = get_cached("matches")
+    key = "matches"
+    cached = get_cached(key)
     if cached:
         return cached
     
-    matches = load_matches_from_json()
+    all_matches = load_matches_from_json()
     
-    # Simple filtering for live scores vs fixtures
-    live_scores = [m for m in matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled"]]
-    fixtures = [m for m in matches if m["matchStatus"] in ["NS", "Sched"]]
+    live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
+    fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
 
-    # For simplicity, this example returns all matches.
-    # You can create separate endpoints or add query params to filter.
-    response_data = {"live": live_scores, "fixtures": fixtures, "all": matches}
-    set_cache("matches", response_data)
+    response_data = {"live": live_scores, "fixtures": fixtures, "all": all_matches}
+    set_cache(key, response_data)
     return response_data
+
+@app.get("/api/standings/{league_id}")
+def get_standings(league_id: str):
+    key = f"standings_{league_id}"
+    cached = get_cached(key)
+    if cached:
+        return cached
+
+    path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
+    data = load_data_from_json(path)
+    
+    if data is None:
+        raise HTTPException(status_code=404, detail="Standings not found for this league.")
+    
+    # The structure might be {"Lnm": "All", "Tables": [{"team": ...}]}
+    standings_table = data.get("Tables", [])
+    set_cache(key, standings_table)
+    return standings_table
+
+
+@app.get("/api/topscorers/{league_id}")
+def get_top_scorers(league_id: str):
+    key = f"topscorers_{league_id}"
+    cached = get_cached(key)
+    if cached:
+        return cached
+
+    path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
+    data = load_data_from_json(path)
+
+    if data is None:
+        raise HTTPException(status_code=404, detail="Top scorers not found for this league.")
+
+    # The structure might be {"Players": [...]}
+    players = data.get("Players", [])
+    set_cache(key, players)
+    return players
+
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
