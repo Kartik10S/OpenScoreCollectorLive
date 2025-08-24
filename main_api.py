@@ -6,10 +6,25 @@ import logging
 import asyncio
 import time
 from fastapi import FastAPI
+import requests   # ✅ for Telegram alerts
+from config import telegram_bot_token, telegram_chatid   # ✅ load creds
 from fastapi.responses import JSONResponse
 from main import updateToday  # OpenScoreCollector scraper
 from threading import Lock
 from logos import TEAM_LOGOS, LEAGUE_LOGOS  # ✅ Import logos
+
+
+# -----------------------------
+# Telegram Error Alert
+# -----------------------------
+def send_telegram_alert(message: str):
+    """Send error alert to Telegram."""
+    try:
+        url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+        payload = {"chat_id": telegram_chatid, "text": f"⚠️ OpenScoreCollector Error:\n{message}"}
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        logging.error(f"Failed to send Telegram alert: {e}")
 
 # -----------------------------
 # League Config (for updateToday)
@@ -209,12 +224,13 @@ def update():
         return JSONResponse(content={"status": "success", "message": "Fixtures updated"}, status_code=200)
     except Exception as e:
         logging.error(f"Error in /api/update: {e}", exc_info=True)
+        send_telegram_alert(str(e))   # ✅ send Telegram alert
         return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
 
 # -----------------------------
 # Background Updater (Optional)
 # -----------------------------
-async def schedule_updates(interval: int = 300):  # 5 minutes
+async def schedule_updates(interval: int = 300):
     while True:
         try:
             updateToday()
@@ -223,6 +239,7 @@ async def schedule_updates(interval: int = 300):  # 5 minutes
                 CACHE.clear()
         except Exception as e:
             logging.error(f"Background update error: {e}")
+            send_telegram_alert(f"Background update failed: {e}")  # ✅ alert Telegram
         await asyncio.sleep(interval)
 
 @app.on_event("startup")
