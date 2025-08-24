@@ -51,6 +51,11 @@ def clear_cache():
 # -----------------------------
 # Centralized Data Loading and Processing
 # -----------------------------
+def get_today_json_path():
+    """Gets the path for today's main data file."""
+    today_str = datetime.date.today().strftime("%Y%m%d")
+    return os.path.join(SCHEDULES_FOLDER, f"{today_str}.json")
+
 def load_and_process_daily_data():
     """
     Loads the main daily JSON file, processes it into structured data
@@ -63,15 +68,17 @@ def load_and_process_daily_data():
 
     path = get_today_json_path()
     if not os.path.isfile(path):
-        logging.warning(f"No JSON file found at {path}. Attempting to generate it.")
-        try:
-            updateToday()
-        except Exception as e:
-            logging.error(f"Failed to create initial data file: {e}")
-            raise HTTPException(status_code=503, detail="Data source is currently unavailable. Please try again later.")
+        # If the file doesn't exist, it means the background scraper hasn't finished yet.
+        # Don't try to scrape here, as it will cause a timeout.
+        raise HTTPException(status_code=503, detail="Data is currently being prepared. Please try again in a minute.")
 
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        # Handle cases where the file is empty or corrupted
+        raise HTTPException(status_code=503, detail="Data source is temporarily corrupted. An update is in progress.")
+
 
     matches = []
     league_info_list = []
@@ -123,30 +130,36 @@ def load_secondary_data(file_path: str):
 # -----------------------------
 # Background Task
 # -----------------------------
+async def run_update_task():
+    """Wrapper to run the blocking updateToday function in a thread."""
+    try:
+        logging.info("Running data update task...")
+        await asyncio.to_thread(updateToday)
+        clear_cache()
+        logging.info("Data update task finished successfully.")
+    except Exception as e:
+        logging.error(f"Data update task failed: {e}")
+        send_telegram_alert(f"Background update failed: {e}")
+
 async def scheduled_update_task(interval: int):
+    # Initial sleep before the first scheduled run to allow startup to complete
+    await asyncio.sleep(10) 
     while True:
+        await run_update_task()
+        logging.info(f"Next background update in {interval} seconds.")
         await asyncio.sleep(interval)
-        try:
-            logging.info("Running background update...")
-            updateToday()
-            clear_cache()
-            logging.info("Background update finished successfully.")
-        except Exception as e:
-            logging.error(f"Background update failed: {e}")
-            send_telegram_alert(f"Background update failed: {e}")
 
 @app.on_event("startup")
 async def startup_event():
     logging.info("Application startup...")
-    # Run initial update in the background to not block startup
-    background_tasks = BackgroundTasks()
-    background_tasks.add_task(updateToday)
+    # Run the first update immediately in the background without blocking startup
+    asyncio.create_task(run_update_task())
     # Start the recurring background task
     asyncio.create_task(scheduled_update_task(interval=600))
-    logging.info("Initial data load and background updater started.")
+    logging.info("Initial data load and background updater have been scheduled.")
 
 # -----------------------------
-# API Endpoints (Ordered from most specific to most general)
+# API Endpoints
 # -----------------------------
 @app.get("/")
 def get_root():
@@ -160,7 +173,10 @@ def get_leagues():
         data = load_and_process_daily_data()
         return data["leagues"]
     except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        raise e
+    except Exception as e:
+        logging.error(f"Error in /api/leagues: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 
 @app.get("/api/scores")
@@ -175,7 +191,10 @@ def get_scores_and_fixtures():
 
         return {"live": live_scores, "fixtures": fixtures, "all": all_matches}
     except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        raise e
+    except Exception as e:
+        logging.error(f"Error in /api/scores: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/standings/{league_name}")
 def get_standings(league_name: str):
@@ -195,7 +214,10 @@ def get_standings(league_name: str):
         
         return data.get("Tables", [])
     except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        raise e
+    except Exception as e:
+        logging.error(f"Error in /api/standings/{league_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/topscorers/{league_name}")
 def get_top_scorers(league_name: str):
@@ -215,12 +237,16 @@ def get_top_scorers(league_name: str):
 
         return data.get("Players", [])
     except HTTPException as e:
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+        raise e
+    except Exception as e:
+        logging.error(f"Error in /api/topscorers/{league_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
     """Manually triggers a background update of the data."""
     logging.info("Manual update triggered via API.")
-    background_tasks.add_task(updateToday)
-    background_tasks.add_task(clear_cache)
+    # Use the async task wrapper to run the update
+    background_tasks.add_task(run_update_task)
     return JSONResponse(content={"status": "success", "message": "Update process started in the background."}, status_code=202)
