@@ -10,3 +10,4 @@ idna==2.10
 six==1.15.0
 tzlocal==2.1
 pytz==2020.4
+beautifulsoup4==4.12.3

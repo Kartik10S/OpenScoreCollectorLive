@@ -137,38 +137,87 @@ def scrape_today_matches():
 # ----------------------
 # League Scrapers
 # ----------------------
+import requests
+from bs4 import BeautifulSoup
+import datetime
+
+# --- Scraper: Fixtures ---
 def scrape_league_fixtures(league_id):
     try:
-        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/2/fixtures"
-        res = requests.get(url, timeout=20)
-        data = res.json()
-        save_json(data, os.path.join(SCHEDULES_FOLDER, f"{league_id}_fixtures.json"))
-    except Exception:
-        err = traceback.format_exc()
-        logging.error(err)
-        sendnotify(f"❌ scrape_league_fixtures failed for {league_id}:\n{err}")
+        url = f"https://www.espn.com/soccer/fixtures/_/league/{league_id}"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
 
+        fixtures = []
+        for match in soup.select(".Table__TR"):
+            teams = match.select(".Table__Team")
+            if len(teams) == 2:
+                home = teams[0].get_text(strip=True)
+                away = teams[1].get_text(strip=True)
+                time = match.select_one(".Table__TD").get_text(strip=True)
+                fixtures.append({
+                    "home": home,
+                    "away": away,
+                    "time": time,
+                    "league": league_id,
+                    "date": datetime.date.today().isoformat()
+                })
+
+        return fixtures
+    except Exception as e:
+        logging.error(f"❌ scrape_league_fixtures failed for {league_id}: {e}")
+        return []
+
+# --- Scraper: Standings ---
 def scrape_league_standings(league_id):
     try:
-        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/1/table"
-        res = requests.get(url, timeout=20)
-        data = res.json()
-        save_json(data, os.path.join(STANDINGS_FOLDER, f"{league_id}_standings.json"))
-    except Exception:
-        err = traceback.format_exc()
-        logging.error(err)
-        sendnotify(f"❌ scrape_league_standings failed for {league_id}:\n{err}")
+        url = f"https://www.espn.com/soccer/standings/_/league/{league_id}"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
 
+        standings = []
+        for row in soup.select(".Table__TR"):
+            team = row.select_one(".hide-mobile span")
+            stats = row.select("td")
+            if team and len(stats) >= 3:
+                standings.append({
+                    "team": team.get_text(strip=True),
+                    "played": stats[0].get_text(strip=True),
+                    "wins": stats[1].get_text(strip=True),
+                    "losses": stats[2].get_text(strip=True),
+                })
+        return standings
+    except Exception as e:
+        logging.error(f"❌ scrape_league_standings failed for {league_id}: {e}")
+        return []
+
+# --- Scraper: Top Scorers ---
 def scrape_league_topscorers(league_id):
     try:
-        url = f"https://prod-public-api.livescore.com/v1/api/app/stage/soccer/{league_id}/3/topscorers"
-        res = requests.get(url, timeout=20)
-        data = res.json()
-        save_json(data, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
-    except Exception:
-        err = traceback.format_exc()
-        logging.error(err)
-        sendnotify(f"❌ scrape_league_topscorers failed for {league_id}:\n{err}")
+        url = f"https://www.espn.com/soccer/stats/_/league/{league_id}"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        scorers = []
+        for row in soup.select(".Table__TR"):
+            cols = row.select("td")
+            if len(cols) >= 4:
+                player = cols[1].get_text(strip=True)
+                team = cols[2].get_text(strip=True)
+                goals = cols[3].get_text(strip=True)
+                scorers.append({
+                    "player": player,
+                    "team": team,
+                    "goals": goals
+                })
+        return scorers
+    except Exception as e:
+        logging.error(f"❌ scrape_league_topscorers failed for {league_id}: {e}")
+        return []
+
 
 # ----------------------
 # Update today
