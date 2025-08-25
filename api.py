@@ -24,6 +24,7 @@ DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
+SEASON_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "season_fixtures")
 
 # -----------------------------
 # Cache
@@ -52,7 +53,6 @@ def clear_cache():
 # Centralized Data Loading and Processing
 # -----------------------------
 def get_data_file_paths():
-    """Gets the paths for today's and yesterday's main data files."""
     today_utc = datetime.datetime.utcnow().date()
     yesterday_utc = today_utc - datetime.timedelta(days=1)
     today_str = today_utc.strftime("%Y%m%d")
@@ -63,15 +63,10 @@ def get_data_file_paths():
     ]
 
 def load_and_process_daily_data():
-    """
-    Loads the main daily JSON file(s), processes it into structured data, and caches the result.
-    It checks both today's and yesterday's files to handle timezone overlaps.
-    """
     cached_data = get_cached("processed_daily_data")
     if cached_data:
         return cached_data
 
-    # --- FIX: Check both today's and yesterday's files to find the data ---
     data = None
     for path in get_data_file_paths():
         if os.path.isfile(path):
@@ -79,56 +74,44 @@ def load_and_process_daily_data():
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                 logging.info(f"Successfully loaded data from {path}")
-                break # Stop after finding the first valid file
+                break
             except (json.JSONDecodeError, FileNotFoundError):
                 logging.warning(f"Could not read or parse {path}, trying next file.")
                 continue
     
     if not data:
-        raise HTTPException(status_code=503, detail="Data is currently being prepared. Please try again in a minute.")
+        raise HTTPException(status_code=503, detail="Daily match data is currently being prepared. Please try again in a minute.")
 
-    matches = []
-    league_info_list = []
-    league_name_to_id_map = {}
+    matches, league_info_list, league_name_to_id_map = [], [], {}
     seen_league_ids = set()
-
     for league in data.get("Stages", []):
         league_name = league.get("Snm", "Unknown League")
         league_id = league.get("Cid") or league.get("Sid")
-        league_logo = LEAGUE_LOGOS.get(league_name, "")
-
         if league_id and league_name and league_id not in seen_league_ids:
-            league_info = {"leagueName": league_name, "leagueId": league_id}
-            league_info_list.append(league_info)
+            league_info_list.append({"leagueName": league_name, "leagueId": league_id})
             league_name_to_id_map[league_name] = league_id
             seen_league_ids.add(league_id)
-
         for event in league.get("Events", []):
             home_team_data = event.get("T1", [{}])[0]
             away_team_data = event.get("T2", [{}])[0]
             scores = event.get("Tr1"), event.get("Tr2")
             status_info = event.get("Eps")
-
             matches.append({
-                "leagueName": league_name, "leagueId": league_id, "leagueLogoUrl": league_logo,
+                "leagueName": league_name, "leagueId": league_id,
                 "homeTeamName": home_team_data.get("Nm", "Home"),
-                "homeTeamLogoUrl": TEAM_LOGOS.get(home_team_data.get("Nm", ""), ""),
                 "awayTeamName": away_team_data.get("Nm", "Away"),
-                "awayTeamLogoUrl": TEAM_LOGOS.get(away_team_data.get("Nm", ""), ""),
                 "matchTime": event.get("Esd"), "matchStatus": status_info,
                 "homeScore": scores[0], "awayScore": scores[1], "matchId": event.get("Eid")
             })
     
     processed_data = {
-        "matches": matches,
-        "leagues": league_info_list,
-        "league_map": league_name_to_id_map
+        "matches": matches, "leagues": league_info_list, "league_map": league_name_to_id_map
     }
     set_cache("processed_daily_data", processed_data)
     return processed_data
 
+
 def load_secondary_data(file_path: str):
-    """Generic function to load standings or topscorers JSON files."""
     if not os.path.isfile(file_path):
         return None
     try:
@@ -141,7 +124,6 @@ def load_secondary_data(file_path: str):
 # Background Task
 # -----------------------------
 async def run_update_task():
-    """Wrapper to run the blocking updateToday function in a thread."""
     try:
         logging.info("Running data update task...")
         await asyncio.to_thread(updateToday)
@@ -152,7 +134,8 @@ async def run_update_task():
         send_telegram_alert(f"Background update failed: {e}")
 
 async def scheduled_update_task(interval: int):
-    await asyncio.sleep(15) 
+    # Wait before the first scheduled run
+    await asyncio.sleep(interval) 
     while True:
         await run_update_task()
         logging.info(f"Next background update in {interval} seconds.")
@@ -161,9 +144,14 @@ async def scheduled_update_task(interval: int):
 @app.on_event("startup")
 async def startup_event():
     logging.info("Application startup...")
-    asyncio.create_task(run_update_task())
+    # --- FIX: Run the first update directly and wait for it to finish ---
+    logging.info("Running initial data load... This may take a moment.")
+    await run_update_task()
+    logging.info("Initial data load complete. Server is now ready.")
+    
+    # Start the recurring background task for subsequent updates
     asyncio.create_task(scheduled_update_task(interval=600))
-    logging.info("Initial data load and background updater have been scheduled.")
+    logging.info("Background updater has been scheduled.")
 
 # -----------------------------
 # API Endpoints
@@ -172,6 +160,20 @@ async def startup_event():
 def get_root():
     return {"message": "Welcome to the OpenScoreCollector API!"}
 
+@app.get("/api/fixtures/{team_name}")
+def get_team_fixtures(team_name: str):
+    try:
+        filename = f"{unquote(team_name).lower()}.json"
+        path = os.path.join(SEASON_FIXTURES_FOLDER, filename)
+        data = load_secondary_data(path)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Season fixtures not found for team '{team_name}'.")
+        return data
+    except Exception as e:
+        logging.error(f"Error in /api/fixtures/{team_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+
+
 @app.get("/api/leagues")
 def get_leagues():
     try:
@@ -179,19 +181,14 @@ def get_leagues():
         return data["leagues"]
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/leagues: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/scores")
-@app.get("/api/fixtures")
-def get_scores_and_fixtures():
+def get_scores():
     try:
         data = load_and_process_daily_data()
         all_matches = data["matches"]
         live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
-        fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
-        return {"live": live_scores, "fixtures": fixtures, "all": all_matches}
+        return {"live": live_scores, "all": all_matches}
     except HTTPException as e:
         raise e
 
@@ -200,17 +197,13 @@ def get_standings(league_name: str):
     try:
         decoded_league_name = unquote(league_name)
         processed_data = load_and_process_daily_data()
-        
         league_id = processed_data["league_map"].get(decoded_league_name)
         if not league_id:
             raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found in today's data.")
-
         path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
         data = load_secondary_data(path)
-        
         if data is None:
-            raise HTTPException(status_code=404, detail="Standings data file not found for this league. It may not be available from the source.")
-        
+            raise HTTPException(status_code=404, detail="Standings data file not found for this league.")
         return data.get("Tables", [])
     except HTTPException as e:
         raise e
@@ -220,17 +213,13 @@ def get_top_scorers(league_name: str):
     try:
         decoded_league_name = unquote(league_name)
         processed_data = load_and_process_daily_data()
-
         league_id = processed_data["league_map"].get(decoded_league_name)
         if not league_id:
             raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found in today's data.")
-
         path = os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json")
         data = load_secondary_data(path)
-
         if data is None:
-            raise HTTPException(status_code=404, detail="Top scorers data file not found for this league. It may not be available from the source.")
-
+            raise HTTPException(status_code=404, detail="Top scorers data file not found for this league.")
         return data.get("Players", [])
     except HTTPException as e:
         raise e
