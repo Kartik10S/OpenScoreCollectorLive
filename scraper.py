@@ -90,25 +90,14 @@ def fetch_data_for_date(date_str):
         return {}
 
 # -----------------------------
-# Updated function to fetch and save season fixtures
+# Simplified function to fetch and save season fixtures
 # -----------------------------
 def save_team_fixture_data():
     """
-    Fetches and saves season fixture JSON, using a marker file to ensure
-    it only runs once per day.
+    Fetches and saves season fixture JSON for all teams.
+    This runs every time the main update is triggered.
     """
-    marker_file_path = os.path.join(SEASON_FIXTURES_FOLDER, "last_update.txt")
-    today_utc_str = datetime.datetime.utcnow().date().isoformat()
-
-    # Check if we've already updated today
-    if os.path.exists(marker_file_path):
-        with open(marker_file_path, 'r') as f:
-            last_update_date = f.read().strip()
-        if last_update_date == today_utc_str:
-            logging.info("Season fixtures have already been updated today. Skipping.")
-            return
-
-    logging.info("Starting daily season fixture update...")
+    logging.info("Fetching team season fixtures...")
     for team_name, url in TEAM_FIXTURE_URLS.items():
         try:
             logging.info(f"Fetching fixtures for {team_name} from {url}...")
@@ -124,10 +113,7 @@ def save_team_fixture_data():
         except json.JSONDecodeError:
             logging.error(f"Could not parse JSON for {team_name} from {url}")
             
-    # After successfully downloading, update the marker file
-    with open(marker_file_path, 'w') as f:
-        f.write(today_utc_str)
-    logging.info(f"Finished fetching team season fixtures. Marker file updated for {today_utc_str}.")
+    logging.info("Finished fetching team season fixtures.")
 
 
 # -----------------------------
@@ -136,6 +122,7 @@ def save_team_fixture_data():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
+        # This will now run every time, ensuring files are always created.
         save_team_fixture_data()
 
         today_utc = datetime.datetime.utcnow().date()
