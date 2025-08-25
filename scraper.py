@@ -4,6 +4,7 @@ import datetime
 import logging
 import requests
 import traceback
+from bs4 import BeautifulSoup
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -15,13 +16,13 @@ SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
 TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 SEASON_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "season_fixtures")
-LEAGUE_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "league_fixtures") # New folder
+LEAGUE_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "league_fixtures")
 
 os.makedirs(SCHEDULES_FOLDER, exist_ok=True)
 os.makedirs(STANDINGS_FOLDER, exist_ok=True)
 os.makedirs(TOPSCORERS_FOLDER, exist_ok=True)
 os.makedirs(SEASON_FIXTURES_FOLDER, exist_ok=True)
-os.makedirs(LEAGUE_FIXTURES_FOLDER, exist_ok=True) # New folder
+os.makedirs(LEAGUE_FIXTURES_FOLDER, exist_ok=True)
 
 # -----------------------------
 # Data Source URLs
@@ -57,7 +58,6 @@ LEAGUE_STANDINGS_URLS = {
     "ligue-1": "https://www.livescore.com/en/football/france/ligue-1/standings/"
 }
 
-# --- NEW: Central place for full league fixture URLs ---
 LEAGUE_FIXTURE_URLS = {
     "premier-league": "https://fixturedownload.com/feed/json/epl-2025",
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
@@ -67,7 +67,15 @@ LEAGUE_FIXTURE_URLS = {
 # Helper & Alerting Functions
 # -----------------------------
 def send_telegram_alert(message: str):
-    pass
+    if not telegram_bot_token or not telegram_chatid:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
+        payload = {"chat_id": telegram_chatid, "text": f"⚠️ OpenScoreCollector Error:\n{message}"}
+        requests.post(url, json=payload, timeout=10)
+    except Exception:
+        pass
+
 def save_json(content, path):
     try:
         with open(path, 'w', encoding='utf-8') as f:
@@ -75,6 +83,7 @@ def save_json(content, path):
         logging.info(f"Saved JSON to {path}")
     except Exception:
         pass
+
 def fetch_data_for_date(date_str):
     try:
         url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{date_str}/0"
@@ -97,7 +106,6 @@ def save_team_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch fixture data for {team_name}: {e}")
 
-# --- NEW: Function to scrape and save full league fixtures ---
 def save_league_fixture_data():
     logging.info("Fetching full league season fixtures...")
     for league_name, url in LEAGUE_FIXTURE_URLS.items():
@@ -108,31 +116,42 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
+# --- FIX: Removed the once-a-day check for maximum reliability ---
 def save_standings_from_livescore():
-    marker_file_path = os.path.join(STANDINGS_FOLDER, "last_standings_update.txt")
-    today_utc_str = datetime.datetime.utcnow().date().isoformat()
-    if os.path.exists(marker_file_path):
-        with open(marker_file_path, 'r') as f:
-            if f.read().strip() == today_utc_str:
-                logging.info("Standings already updated today. Skipping.")
-                return
-    logging.info("Starting daily standings update from LiveScore pages...")
+    """
+    Scrapes standings data from LiveScore HTML pages by parsing embedded JSON.
+    This now runs every time the main update is triggered.
+    """
+    logging.info("Starting standings update from LiveScore pages...")
     for league_name, url in LEAGUE_STANDINGS_URLS.items():
         try:
+            logging.info(f"Fetching standings for {league_name} from {url}...")
             response = requests.get(url, timeout=20)
             response.raise_for_status()
+            
             soup = BeautifulSoup(response.text, 'html.parser')
             script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-            if script_tag:
-                data = json.loads(script_tag.string)
-                standings_data = data.get('props', {}).get('pageProps', {}).get('standings', [{}])[0].get('tables', [])
-                if standings_data:
-                    save_json(standings_data, os.path.join(STANDINGS_FOLDER, f"{league_name}.json"))
-        except Exception as e:
-            logging.error(f"Could not parse standings for {league_name}: {e}")
-    with open(marker_file_path, 'w') as f:
-        f.write(today_utc_str)
-    logging.info(f"Finished fetching standings. Marker file updated.")
+            
+            if not script_tag:
+                logging.warning(f"Could not find __NEXT_DATA__ script tag for {league_name}")
+                continue
+
+            data = json.loads(script_tag.string)
+            standings_data = data.get('props', {}).get('pageProps', {}).get('standings', [{}])[0].get('tables', [])
+            
+            if not standings_data:
+                logging.warning(f"Could not extract standings table for {league_name}")
+                continue
+
+            file_path = os.path.join(STANDINGS_FOLDER, f"{league_name}.json")
+            save_json(standings_data, file_path)
+
+        except requests.RequestException as e:
+            logging.error(f"Could not fetch standings page for {league_name}: {e}")
+        except (json.JSONDecodeError, AttributeError, IndexError) as e:
+            logging.error(f"Could not parse standings JSON for {league_name}: {e}")
+    logging.info("Finished fetching standings.")
+
 
 # -----------------------------
 # Main Scraper Logic
@@ -142,9 +161,46 @@ def updateToday():
     try:
         save_standings_from_livescore()
         save_team_fixture_data()
-        save_league_fixture_data() # New function call
-        # ... (rest of daily scraper logic is the same)
+        save_league_fixture_data()
+        
+        today_utc = datetime.datetime.utcnow().date()
+        yesterday_utc = today_utc - datetime.timedelta(days=1)
+        today_str = today_utc.strftime('%Y%m%d')
+        yesterday_str = yesterday_utc.strftime('%Y%m%d')
+
+        logging.info(f"Fetching daily data for {today_str} and {yesterday_str} (UTC)...")
+        today_data = fetch_data_for_date(today_str)
+        yesterday_data = fetch_data_for_date(yesterday_str)
+
+        combined_stages = yesterday_data.get("Stages", []) + today_data.get("Stages", [])
+        
+        merged_stages_dict = {}
+        for stage in combined_stages:
+            stage_id = stage.get("Sid")
+            if not stage_id: continue
+            
+            if stage_id not in merged_stages_dict:
+                merged_stages_dict[stage_id] = stage
+            else:
+                existing_events = {evt.get("Eid") for evt in merged_stages_dict[stage_id].get("Events", [])}
+                new_events = [evt for evt in stage.get("Events", []) if evt.get("Eid") not in existing_events]
+                merged_stages_dict[stage_id].get("Events", []).extend(new_events)
+
+        final_data = {"Stages": list(merged_stages_dict.values())}
+        save_json(final_data, os.path.join(SCHEDULES_FOLDER, f"{today_str}.json"))
+
+        for league in final_data.get("Stages", []):
+            league_id = league.get("Cid") or league.get("Sid")
+            if not league_id: continue
+
+            # We no longer need to get top scorers from the daily feed
+            # as the standings scraper is more reliable.
+            # top_scorers = league.get("TopScorers")
+            # if top_scorers:
+            #     save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
+        
         logging.info("✅ Daily update process completed successfully.")
+
     except Exception:
         err = traceback.format_exc()
         logging.error(f"❌ updateToday failed critically:\n{err}")
