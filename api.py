@@ -84,18 +84,29 @@ def load_and_process_daily_data():
             league_info_list.append({"leagueName": league_name, "leagueId": league_id})
             league_name_to_id_map[league_name] = league_id
             seen_league_ids.add(league_id)
+        
         for event in league.get("Events", []):
-            home_team_data = event.get("T1", [{}])[0]
-            away_team_data = event.get("T2", [{}])[0]
-            scores = event.get("Tr1"), event.get("Tr2")
-            status_info = event.get("Eps")
-            matches.append({
-                "leagueName": league_name, "leagueId": league_id,
-                "homeTeamName": home_team_data.get("Nm", "Home"),
-                "awayTeamName": away_team_data.get("Nm", "Away"),
-                "matchTime": event.get("Esd"), "matchStatus": status_info,
-                "homeScore": scores[0], "awayScore": scores[1], "matchId": event.get("Eid")
-            })
+            try:
+                # --- FIX: More robust data extraction to prevent crashes ---
+                # Safely get team data, providing a default empty dict if missing
+                home_team_data = event.get("T1", [{}])[0] if event.get("T1") else {}
+                away_team_data = event.get("T2", [{}])[0] if event.get("T2") else {}
+
+                matches.append({
+                    "leagueName": league_name, 
+                    "leagueId": league_id,
+                    "homeTeamName": home_team_data.get("Nm", "N/A"),
+                    "awayTeamName": away_team_data.get("Nm", "N/A"),
+                    "matchTime": event.get("Esd"), 
+                    "matchStatus": event.get("Eps"),
+                    "homeScore": event.get("Tr1"), 
+                    "awayScore": event.get("Tr2"), 
+                    "matchId": event.get("Eid")
+                })
+            except (IndexError, TypeError) as e:
+                # This will catch errors if the data for a specific match is malformed
+                logging.error(f"Could not process a match in league {league_name}. Data: {event}. Error: {e}")
+                continue # Skip to the next match
     
     processed_data = {
         "matches": matches, "leagues": league_info_list, "league_map": league_name_to_id_map
@@ -171,6 +182,9 @@ def get_leagues():
         return data["leagues"]
     except HTTPException as e:
         raise e
+    except Exception as e:
+        logging.error(f"Error in /api/leagues: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/scores")
 def get_scores():
@@ -181,6 +195,9 @@ def get_scores():
         return {"live": live_scores, "all": all_matches}
     except HTTPException as e:
         raise e
+    except Exception as e:
+        logging.error(f"Error in /api/scores: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 # --- UPDATED: Standings endpoint now uses the new, reliable files ---
 @app.get("/api/standings/{league_name}")
@@ -219,6 +236,9 @@ def get_top_scorers(league_name: str):
         return data.get("Players", [])
     except HTTPException as e:
         raise e
+    except Exception as e:
+        logging.error(f"Error in /api/topscorers/{league_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
