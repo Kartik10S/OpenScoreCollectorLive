@@ -4,7 +4,6 @@ import datetime
 import logging
 import requests
 import traceback
-import time
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -57,7 +56,6 @@ TEAM_FIXTURE_URLS = {
 # Telegram Alerting
 # -----------------------------
 def send_telegram_alert(message: str):
-    """Send an alert message to a Telegram chat."""
     if not telegram_bot_token or not telegram_chatid:
         logging.warning("Telegram token or chat ID is not configured. Skipping alert.")
         return
@@ -72,7 +70,6 @@ def send_telegram_alert(message: str):
 # Helper Functions
 # -----------------------------
 def save_json(content, path):
-    """Saves content to a JSON file."""
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(content, f, ensure_ascii=False, indent=2)
@@ -83,7 +80,6 @@ def save_json(content, path):
         send_telegram_alert(f"❌ save_json failed ({os.path.basename(path)}):\n{err}")
 
 def fetch_data_for_date(date_str):
-    """Fetches soccer data for a specific date string (YYYYMMDD)."""
     try:
         url = f"https://prod-public-api.livescore.com/v1/api/app/date/soccer/{date_str}/0"
         res = requests.get(url, timeout=20)
@@ -91,36 +87,28 @@ def fetch_data_for_date(date_str):
         return res.json()
     except requests.RequestException as e:
         logging.error(f"Failed to fetch data for date {date_str}: {e}")
-        return {} # Return empty dict on failure
+        return {}
 
 # -----------------------------
 # Updated function to fetch and save season fixtures
 # -----------------------------
 def save_team_fixture_data():
     """
-    Fetches and saves season fixture JSON, but only once per day
-    after a specific time (approximating 11:59 AM IST).
+    Fetches and saves season fixture JSON, using a marker file to ensure
+    it only runs once per day.
     """
-    TARGET_UPDATE_HOUR_UTC = 6
-    TARGET_UPDATE_MINUTE_UTC = 29
+    marker_file_path = os.path.join(SEASON_FIXTURES_FOLDER, "last_update.txt")
+    today_utc_str = datetime.datetime.utcnow().date().isoformat()
 
-    check_file_path = os.path.join(SEASON_FIXTURES_FOLDER, "arsenal.json")
-    now_utc = datetime.datetime.utcnow()
-
-    if os.path.exists(check_file_path):
-        file_mod_time_utc = datetime.datetime.utcfromtimestamp(os.path.getmtime(check_file_path))
-        if file_mod_time_utc.date() == now_utc.date():
+    # Check if we've already updated today
+    if os.path.exists(marker_file_path):
+        with open(marker_file_path, 'r') as f:
+            last_update_date = f.read().strip()
+        if last_update_date == today_utc_str:
             logging.info("Season fixtures have already been updated today. Skipping.")
             return
 
-    is_time_to_update = (now_utc.hour > TARGET_UPDATE_HOUR_UTC) or \
-                        (now_utc.hour == TARGET_UPDATE_HOUR_UTC and now_utc.minute >= TARGET_UPDATE_MINUTE_UTC)
-
-    if not is_time_to_update:
-        logging.info(f"Not yet time for the daily season fixture update (current UTC: {now_utc.strftime('%H:%M')}, target: >{TARGET_UPDATE_HOUR_UTC:02}:{TARGET_UPDATE_MINUTE_UTC:02}). Skipping.")
-        return
-
-    logging.info("It's time for the daily season fixture update. Fetching new data...")
+    logging.info("Starting daily season fixture update...")
     for team_name, url in TEAM_FIXTURE_URLS.items():
         try:
             logging.info(f"Fetching fixtures for {team_name} from {url}...")
@@ -136,16 +124,16 @@ def save_team_fixture_data():
         except json.JSONDecodeError:
             logging.error(f"Could not parse JSON for {team_name} from {url}")
             
-    logging.info("Finished fetching team season fixtures.")
+    # After successfully downloading, update the marker file
+    with open(marker_file_path, 'w') as f:
+        f.write(today_utc_str)
+    logging.info(f"Finished fetching team season fixtures. Marker file updated for {today_utc_str}.")
 
 
 # -----------------------------
 # Main Scraper Logic
 # -----------------------------
 def updateToday():
-    """
-    Scrapes data for daily matches and also saves season-long fixtures.
-    """
     logging.info("Starting updateToday process...")
     try:
         save_team_fixture_data()
@@ -188,7 +176,7 @@ def updateToday():
             if top_scorers:
                 save_json(top_scorers, os.path.join(TOPSCORERS_FOLDER, f"{league_id}_topscorers.json"))
         
-        logging.info("✅ updateToday process completed successfully.")
+        logging.info("✅ Daily live score update process completed successfully.")
 
     except Exception:
         err = traceback.format_exc()
@@ -196,6 +184,5 @@ def updateToday():
         send_telegram_alert(f"❌ updateToday crashed:\n{err}")
         raise
 
-# --- NEW: Make the script runnable from the command line ---
 if __name__ == "__main__":
     updateToday()
