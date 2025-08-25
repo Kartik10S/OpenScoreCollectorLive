@@ -7,8 +7,7 @@ import time
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from threading import Lock
-from scraper import updateToday, send_telegram_alert # Import from scraper
-from logos import TEAM_LOGOS, LEAGUE_LOGOS
+from scraper import updateToday, send_telegram_alert
 from urllib.parse import unquote
 
 # -----------------------------
@@ -19,8 +18,9 @@ app = FastAPI(title="OpenScoreCollector API")
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
-TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
+TOPSCORERS_FOLDER = os.path.join(DATA_FOLDER, "topscorers")
 SEASON_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "season_fixtures")
+LEAGUE_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "league_fixtures") # New folder
 
 # -----------------------------
 # Cache & Data Loading
@@ -87,33 +87,25 @@ def load_and_process_daily_data():
         
         for event in league.get("Events", []):
             try:
-                # --- FIX: More robust data extraction to prevent crashes ---
-                # Safely get team data, providing a default empty dict if missing
                 home_team_data = event.get("T1", [{}])[0] if event.get("T1") else {}
                 away_team_data = event.get("T2", [{}])[0] if event.get("T2") else {}
-
                 matches.append({
-                    "leagueName": league_name, 
-                    "leagueId": league_id,
+                    "leagueName": league_name, "leagueId": league_id,
                     "homeTeamName": home_team_data.get("Nm", "N/A"),
                     "awayTeamName": away_team_data.get("Nm", "N/A"),
-                    "matchTime": event.get("Esd"), 
-                    "matchStatus": event.get("Eps"),
-                    "homeScore": event.get("Tr1"), 
-                    "awayScore": event.get("Tr2"), 
+                    "matchTime": event.get("Esd"), "matchStatus": event.get("Eps"),
+                    "homeScore": event.get("Tr1"), "awayScore": event.get("Tr2"), 
                     "matchId": event.get("Eid")
                 })
             except (IndexError, TypeError) as e:
-                # This will catch errors if the data for a specific match is malformed
                 logging.error(f"Could not process a match in league {league_name}. Data: {event}. Error: {e}")
-                continue # Skip to the next match
+                continue
     
     processed_data = {
         "matches": matches, "leagues": league_info_list, "league_map": league_name_to_id_map
     }
     set_cache("processed_daily_data", processed_data)
     return processed_data
-
 
 def load_secondary_data(file_path: str):
     if not os.path.isfile(file_path):
@@ -150,30 +142,15 @@ async def startup_event():
     logging.info("Running initial data load... This may take a moment.")
     await run_update_task()
     logging.info("Initial data load complete. Server is now ready.")
-    
     asyncio.create_task(scheduled_update_task(interval=600))
     logging.info("Background updater has been scheduled.")
 
 # -----------------------------
-# API Endpoints
+# API Endpoints (Reordered and updated for new structure)
 # -----------------------------
 @app.get("/")
 def get_root():
     return {"message": "Welcome to the OpenScoreCollector API!"}
-
-@app.get("/api/fixtures/{team_name}")
-def get_team_fixtures(team_name: str):
-    try:
-        filename = f"{unquote(team_name).lower()}.json"
-        path = os.path.join(SEASON_FIXTURES_FOLDER, filename)
-        data = load_secondary_data(path)
-        if data is None:
-            raise HTTPException(status_code=404, detail=f"Season fixtures not found for team '{team_name}'.")
-        return data
-    except Exception as e:
-        logging.error(f"Error in /api/fixtures/{team_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
-
 
 @app.get("/api/leagues")
 def get_leagues():
@@ -182,44 +159,53 @@ def get_leagues():
         return data["leagues"]
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/leagues: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/scores")
-def get_scores():
+def get_daily_fixtures_and_scores():
     try:
         data = load_and_process_daily_data()
         all_matches = data["matches"]
         live_scores = [m for m in all_matches if m["matchStatus"] not in ["NS", "FT", "Sched", "Cancelled", "Postponed", "Awarded"]]
-        return {"live": live_scores, "all": all_matches}
+        fixtures = [m for m in all_matches if m["matchStatus"] in ["NS", "Sched"]]
+        return {"live": live_scores, "fixtures": fixtures, "all": all_matches}
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/scores: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
-# --- UPDATED: Standings endpoint now uses the new, reliable files ---
+@app.get("/api/fixtures/{league_name}/{team_name}")
+def get_team_fixtures_in_league(league_name: str, team_name: str):
+    try:
+        filename = f"{unquote(team_name).lower()}.json"
+        path = os.path.join(SEASON_FIXTURES_FOLDER, filename)
+        data = load_secondary_data(path)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Season fixtures not found for team '{team_name}'.")
+        return data
+    except HTTPException as e:
+        raise e
+
+@app.get("/api/fixtures/{league_name}")
+def get_league_fixtures(league_name: str):
+    try:
+        filename = f"{unquote(league_name).lower().replace(' ', '-')}.json"
+        path = os.path.join(LEAGUE_FIXTURES_FOLDER, filename)
+        data = load_secondary_data(path)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"Full season fixtures not found for league '{league_name}'.")
+        return data
+    except HTTPException as e:
+        raise e
+
 @app.get("/api/standings/{league_name}")
 def get_standings(league_name: str):
-    """
-    Returns the full standings for a specific league from the scraped file.
-    """
     try:
-        # Sanitize and format the league name to match the filename
-        # e.g., "premier league" -> "premier-league.json"
         filename = f"{unquote(league_name).lower().replace(' ', '-')}.json"
         path = os.path.join(STANDINGS_FOLDER, filename)
-
         data = load_secondary_data(path)
-        
         if data is None:
-            raise HTTPException(status_code=404, detail=f"Standings not found for league '{league_name}'. Data may not have been scraped yet.")
-        
+            raise HTTPException(status_code=404, detail=f"Standings not found for league '{league_name}'.")
         return data
-    except Exception as e:
-        logging.error(f"Error in /api/standings/{league_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+    except HTTPException as e:
+        raise e
 
 @app.get("/api/topscorers/{league_name}")
 def get_top_scorers(league_name: str):
@@ -236,9 +222,6 @@ def get_top_scorers(league_name: str):
         return data.get("Players", [])
     except HTTPException as e:
         raise e
-    except Exception as e:
-        logging.error(f"Error in /api/topscorers/{league_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.post("/api/update")
 def trigger_update(background_tasks: BackgroundTasks):
