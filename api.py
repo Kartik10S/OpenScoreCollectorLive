@@ -12,14 +12,10 @@ from logos import TEAM_LOGOS, LEAGUE_LOGOS
 from urllib.parse import unquote
 
 # -----------------------------
-# Setup
+# Setup & Paths
 # -----------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 app = FastAPI(title="OpenScoreCollector API")
-
-# -----------------------------
-# Paths
-# -----------------------------
 DATA_FOLDER = "data"
 SCHEDULES_FOLDER = os.path.join(DATA_FOLDER, "schedules")
 STANDINGS_FOLDER = os.path.join(DATA_FOLDER, "standings")
@@ -27,11 +23,11 @@ TOPSCORERS_FOLDER = os.path.join(STANDINGS_FOLDER, "topscorers")
 SEASON_FIXTURES_FOLDER = os.path.join(DATA_FOLDER, "season_fixtures")
 
 # -----------------------------
-# Cache
+# Cache & Data Loading
 # -----------------------------
 CACHE = {}
 CACHE_LOCK = Lock()
-CACHE_TTL = 60  # Cache for 1 minute
+CACHE_TTL = 60
 
 def get_cached(key):
     with CACHE_LOCK:
@@ -49,9 +45,6 @@ def clear_cache():
         CACHE.clear()
     logging.info("Cache cleared.")
 
-# -----------------------------
-# Centralized Data Loading and Processing
-# -----------------------------
 def get_data_file_paths():
     today_utc = datetime.datetime.utcnow().date()
     yesterday_utc = today_utc - datetime.timedelta(days=1)
@@ -134,7 +127,6 @@ async def run_update_task():
         send_telegram_alert(f"Background update failed: {e}")
 
 async def scheduled_update_task(interval: int):
-    # Wait before the first scheduled run
     await asyncio.sleep(interval) 
     while True:
         await run_update_task()
@@ -144,12 +136,10 @@ async def scheduled_update_task(interval: int):
 @app.on_event("startup")
 async def startup_event():
     logging.info("Application startup...")
-    # --- FIX: Run the first update directly and wait for it to finish ---
     logging.info("Running initial data load... This may take a moment.")
     await run_update_task()
     logging.info("Initial data load complete. Server is now ready.")
     
-    # Start the recurring background task for subsequent updates
     asyncio.create_task(scheduled_update_task(interval=600))
     logging.info("Background updater has been scheduled.")
 
@@ -192,21 +182,27 @@ def get_scores():
     except HTTPException as e:
         raise e
 
+# --- UPDATED: Standings endpoint now uses the new, reliable files ---
 @app.get("/api/standings/{league_name}")
 def get_standings(league_name: str):
+    """
+    Returns the full standings for a specific league from the scraped file.
+    """
     try:
-        decoded_league_name = unquote(league_name)
-        processed_data = load_and_process_daily_data()
-        league_id = processed_data["league_map"].get(decoded_league_name)
-        if not league_id:
-            raise HTTPException(status_code=404, detail=f"League '{decoded_league_name}' not found in today's data.")
-        path = os.path.join(STANDINGS_FOLDER, f"{league_id}.json")
+        # Sanitize and format the league name to match the filename
+        # e.g., "premier league" -> "premier-league.json"
+        filename = f"{unquote(league_name).lower().replace(' ', '-')}.json"
+        path = os.path.join(STANDINGS_FOLDER, filename)
+
         data = load_secondary_data(path)
+        
         if data is None:
-            raise HTTPException(status_code=404, detail="Standings data file not found for this league.")
-        return data.get("Tables", [])
-    except HTTPException as e:
-        raise e
+            raise HTTPException(status_code=404, detail=f"Standings not found for league '{league_name}'. Data may not have been scraped yet.")
+        
+        return data
+    except Exception as e:
+        logging.error(f"Error in /api/standings/{league_name}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
 
 @app.get("/api/topscorers/{league_name}")
 def get_top_scorers(league_name: str):
