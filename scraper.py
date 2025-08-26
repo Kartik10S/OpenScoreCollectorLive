@@ -55,13 +55,13 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: ESPN URLs for standings ---
-ESPN_LEAGUE_URLS = {
-    "premier-league": "https://www.espn.com/soccer/standings/_/league/eng.1",
-    "laliga": "https://www.espn.com/soccer/standings/_/league/esp.1",
-    "serie-a": "https://www.espn.com/soccer/standings/_/league/ita.1",
-    "bundesliga": "https://www.espn.com/soccer/standings/_/league/ger.1",
-    "ligue-1": "https://www.espn.com/soccer/standings/_/league/fra.1"
+# --- NEW: The Guardian URLs for standings ---
+GUARDIAN_LEAGUE_URLS = {
+    "premier-league": "https://www.theguardian.com/football/premierleague/table",
+    "laliga": "https://www.theguardian.com/football/laliga/table",
+    "serie-a": "https://www.theguardian.com/football/seriea/table",
+    "bundesliga": "https://www.theguardian.com/football/bundesliga/table",
+    "ligue-1": "https://www.theguardian.com/football/ligue1/table"
 }
 
 # -----------------------------
@@ -113,16 +113,16 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using ESPN ---
-def save_standings_from_espn():
+# --- NEW: Standings scraper using The Guardian ---
+def save_standings_from_the_guardian():
     """
-    Scrapes standings data from ESPN by parsing the HTML table.
+    Scrapes standings data from The Guardian by parsing the HTML table.
     """
-    logging.info("--- Starting Standings Scraper (ESPN) ---")
+    logging.info("--- Starting Standings Scraper (The Guardian) ---")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    for league_name, url in ESPN_LEAGUE_URLS.items():
+    for league_name, url in GUARDIAN_LEAGUE_URLS.items():
         try:
             logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
             response = requests.get(url, headers=headers, timeout=20)
@@ -132,7 +132,7 @@ def save_standings_from_espn():
             standings_data = []
             
             # Find all table rows in the main standings table
-            rows = soup.select('.Table__TBODY tr')
+            rows = soup.select('.table--league-table .table__row-grouping')
             
             if not rows:
                 logging.warning(f"No standings rows found for {league_name}. Page structure may have changed.")
@@ -141,10 +141,10 @@ def save_standings_from_espn():
             for row in rows:
                 # Extract all cell data from the row
                 cells = row.find_all('td')
-                if len(cells) < 8: # A valid row should have at least 8 columns
+                if len(cells) < 10: # A valid row should have at least 10 columns
                     continue
                 
-                team_name_tag = cells[0].find('span', class_='hide-mobile')
+                team_name_tag = cells[1].find('span', class_='team-name__long')
                 if not team_name_tag:
                     continue
 
@@ -152,16 +152,16 @@ def save_standings_from_espn():
                 
                 # Create a dictionary for the team's stats
                 team_stats = {
-                    "rank": len(standings_data) + 1,
+                    "rank": cells[0].get_text(strip=True),
                     "team": {"name": team_name},
-                    "games": cells[1].get_text(strip=True),
-                    "wins": cells[2].get_text(strip=True),
-                    "draws": cells[3].get_text(strip=True),
-                    "losses": cells[4].get_text(strip=True),
-                    "goalsFor": cells[5].get_text(strip=True),
-                    "goalsAgainst": cells[6].get_text(strip=True),
-                    "goalDifference": cells[7].get_text(strip=True),
-                    "points": cells[8].get_text(strip=True)
+                    "games": cells[2].get_text(strip=True),
+                    "wins": cells[3].get_text(strip=True),
+                    "draws": cells[4].get_text(strip=True),
+                    "losses": cells[5].get_text(strip=True),
+                    "goalsFor": cells[6].get_text(strip=True),
+                    "goalsAgainst": cells[7].get_text(strip=True),
+                    "goalDifference": cells[8].get_text(strip=True),
+                    "points": cells[9].get_text(strip=True)
                 }
                 standings_data.append(team_stats)
 
@@ -177,7 +177,7 @@ def save_standings_from_espn():
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
         except Exception as e:
             logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}", exc_info=True)
-    logging.info("--- Finished Standings Scraper (ESPN) ---")
+    logging.info("--- Finished Standings Scraper (The Guardian) ---")
 
 
 # -----------------------------
@@ -186,7 +186,7 @@ def save_standings_from_espn():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_espn()
+        save_standings_from_the_guardian()
         save_team_fixture_data()
         save_league_fixture_data()
         
