@@ -55,7 +55,7 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: BBC Sport URLs for standings ---
+# --- BBC Sport URLs for standings ---
 BBC_LEAGUE_URLS = {
     "premier-league": "https://www.bbc.com/sport/football/premier-league/table",
     "laliga": "https://www.bbc.com/sport/football/spanish-la-liga/table",
@@ -113,7 +113,7 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using BBC Sport ---
+# --- NEW: Standings scraper using BBC Sport with updated selectors ---
 def save_standings_from_bbc():
     """
     Scrapes standings data from BBC Sport by parsing the HTML table.
@@ -131,8 +131,8 @@ def save_standings_from_bbc():
             soup = BeautifulSoup(response.text, 'html.parser')
             standings_data = []
             
-            # Find the main standings table
-            table = soup.find('table', class_='ssrcss-1k32n2v-Table')
+            # --- FIX: Using a more stable selector based on the provided HTML ---
+            table = soup.find('table', {'data-testid': 'football-table'})
             if not table:
                 logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
                 continue
@@ -145,10 +145,12 @@ def save_standings_from_bbc():
 
             for row in rows:
                 cells = row.find_all('td')
+                # A full data row has 10 cells. Some rows are just for notes.
                 if len(cells) < 10:
                     continue
                 
-                team_name_tag = cells[1].find('span', class_='ssrcss-q0327g-TeamName')
+                # --- FIX: Using a more stable selector for the team name ---
+                team_name_tag = cells[1].find('span', class_='visually-hidden')
                 if not team_name_tag:
                     continue
 
