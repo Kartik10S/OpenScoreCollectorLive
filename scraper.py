@@ -4,8 +4,7 @@ import datetime
 import logging
 import requests
 import traceback
-import random
-from config import telegram_bot_token, telegram_chatid
+from config import telegram_bot_token, telegram_chatid, api_football_key
 
 # -----------------------------
 # Logging & Setup
@@ -25,7 +24,7 @@ os.makedirs(SEASON_FIXTURES_FOLDER, exist_ok=True)
 os.makedirs(LEAGUE_FIXTURES_FOLDER, exist_ok=True)
 
 # -----------------------------
-# Data Source URLs
+# Data Source URLs & IDs
 # -----------------------------
 TEAM_FIXTURE_URLS = {
     "arsenal": "https://fixturedownload.com/feed/json/epl-2025/arsenal",
@@ -55,21 +54,15 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-SOFASCORE_LEAGUE_IDS = {
-    "premier-league": {"id": 17, "season_id": 52186},
-    "laliga": {"id": 8, "season_id": 52376},
-    "serie-a": {"id": 23, "season_id": 52760},
-    "bundesliga": {"id": 35, "season_id": 52162},
-    "ligue-1": {"id": 34, "season_id": 52272}
+# --- NEW: api-football.com details for standings ---
+API_FOOTBALL_LEAGUE_IDS = {
+    "premier-league": 39,
+    "laliga": 140,
+    "serie-a": 135,
+    "bundesliga": 78,
+    "ligue-1": 61
 }
-
-# --- NEW: List of User-Agent strings to rotate ---
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
-]
+CURRENT_SEASON = 2025
 
 # -----------------------------
 # Helper & Alerting Functions
@@ -120,40 +113,46 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-def save_standings_from_sofascore():
+# --- NEW: Standings scraper using api-football.com ---
+def save_standings_from_api_football():
     """
-    Fetches standings data from the SofaScore API, rotating User-Agents to avoid being blocked.
+    Fetches standings data from the api-football.com API.
     """
-    logging.info("--- Starting Standings Scraper (SofaScore) ---")
-    for league_name, ids in SOFASCORE_LEAGUE_IDS.items():
+    if not api_football_key or api_football_key == "YOUR_API_FOOTBALL_KEY_HERE":
+        logging.warning("API Football key not configured. Skipping standings update.")
+        return
+
+    logging.info("--- Starting Standings Scraper (api-football.com) ---")
+    headers = {
+        'x-rapidapi-host': "v3.football.api-sports.io",
+        'x-rapidapi-key': api_football_key
+    }
+    
+    for league_name, league_id in API_FOOTBALL_LEAGUE_IDS.items():
         try:
-            # --- FIX: Rotate User-Agent for each request ---
-            headers = {
-                'User-Agent': random.choice(USER_AGENTS),
-                'Referer': 'https://www.sofascore.com/',
-                'Cache-Control': 'no-cache'
-            }
-            url = f"https://api.sofascore.com/api/v1/unique-tournament/{ids['id']}/season/{ids['season_id']}/standings/total"
-            logging.info(f"Attempting to fetch standings for {league_name} with User-Agent: {headers['User-Agent']}")
-            response = requests.get(url, headers=headers, timeout=20)
+            url = f"https://v3.football.api-sports.io/standings?league={league_id}&season={CURRENT_SEASON}"
+            logging.info(f"Attempting to fetch standings for {league_name}...")
+            response = requests.get(url, headers=headers, timeout=25)
             response.raise_for_status()
             
             data = response.json()
-            standings_data = data.get("standings", [])
             
-            if not standings_data:
-                logging.warning(f"No standings data found in SofaScore API response for {league_name}")
+            if not data.get("response"):
+                logging.warning(f"No standings data in API response for {league_name}. Errors: {data.get('errors')}")
                 continue
 
+            # The API returns a complex object, we just need the actual standings array
+            standings_data = data["response"][0]["league"]["standings"][0]
+            
             file_path = os.path.join(STANDINGS_FOLDER, f"{league_name}.json")
             save_json(standings_data, file_path)
             logging.info(f"SUCCESS: Saved standings for {league_name}.")
 
         except requests.RequestException as e:
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
-        except json.JSONDecodeError:
-            logging.error(f"CRITICAL ERROR: Could not parse JSON for {league_name}")
-    logging.info("--- Finished Standings Scraper (SofaScore) ---")
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}")
+    logging.info("--- Finished Standings Scraper (api-football.com) ---")
 
 
 # -----------------------------
@@ -162,7 +161,7 @@ def save_standings_from_sofascore():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_sofascore()
+        save_standings_from_api_football()
         save_team_fixture_data()
         save_league_fixture_data()
         
