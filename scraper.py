@@ -4,7 +4,8 @@ import datetime
 import logging
 import requests
 import traceback
-from config import telegram_bot_token, telegram_chatid, api_football_key
+from bs4 import BeautifulSoup
+from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
 # Logging & Setup
@@ -24,7 +25,7 @@ os.makedirs(SEASON_FIXTURES_FOLDER, exist_ok=True)
 os.makedirs(LEAGUE_FIXTURES_FOLDER, exist_ok=True)
 
 # -----------------------------
-# Data Source URLs & IDs
+# Data Source URLs
 # -----------------------------
 TEAM_FIXTURE_URLS = {
     "arsenal": "https://fixturedownload.com/feed/json/epl-2025/arsenal",
@@ -54,15 +55,14 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: api-football.com details for standings ---
-API_FOOTBALL_LEAGUE_IDS = {
-    "premier-league": 39,
-    "laliga": 140,
-    "serie-a": 135,
-    "bundesliga": 78,
-    "ligue-1": 61
+# --- NEW: ESPN URLs for standings ---
+ESPN_LEAGUE_URLS = {
+    "premier-league": "https://www.espn.com/soccer/standings/_/league/eng.1",
+    "laliga": "https://www.espn.com/soccer/standings/_/league/esp.1",
+    "serie-a": "https://www.espn.com/soccer/standings/_/league/ita.1",
+    "bundesliga": "https://www.espn.com/soccer/standings/_/league/ger.1",
+    "ligue-1": "https://www.espn.com/soccer/standings/_/league/fra.1"
 }
-CURRENT_SEASON = 2025
 
 # -----------------------------
 # Helper & Alerting Functions
@@ -113,46 +113,71 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using api-football.com ---
-def save_standings_from_api_football():
+# --- NEW: Standings scraper using ESPN ---
+def save_standings_from_espn():
     """
-    Fetches standings data from the api-football.com API.
+    Scrapes standings data from ESPN by parsing the HTML table.
     """
-    if not api_football_key or api_football_key == "YOUR_API_FOOTBALL_KEY_HERE":
-        logging.warning("API Football key not configured. Skipping standings update.")
-        return
-
-    logging.info("--- Starting Standings Scraper (api-football.com) ---")
+    logging.info("--- Starting Standings Scraper (ESPN) ---")
     headers = {
-        'x-rapidapi-host': "v3.football.api-sports.io",
-        'x-rapidapi-key': api_football_key
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    
-    for league_name, league_id in API_FOOTBALL_LEAGUE_IDS.items():
+    for league_name, url in ESPN_LEAGUE_URLS.items():
         try:
-            url = f"https://v3.football.api-sports.io/standings?league={league_id}&season={CURRENT_SEASON}"
-            logging.info(f"Attempting to fetch standings for {league_name}...")
-            response = requests.get(url, headers=headers, timeout=25)
+            logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
+            response = requests.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             
-            data = response.json()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            standings_data = []
             
-            if not data.get("response"):
-                logging.warning(f"No standings data in API response for {league_name}. Errors: {data.get('errors')}")
+            # Find all table rows in the main standings table
+            rows = soup.select('.Table__TBODY tr')
+            
+            if not rows:
+                logging.warning(f"No standings rows found for {league_name}. Page structure may have changed.")
                 continue
 
-            # The API returns a complex object, we just need the actual standings array
-            standings_data = data["response"][0]["league"]["standings"][0]
-            
+            for row in rows:
+                # Extract all cell data from the row
+                cells = row.find_all('td')
+                if len(cells) < 8: # A valid row should have at least 8 columns
+                    continue
+                
+                team_name_tag = cells[0].find('span', class_='hide-mobile')
+                if not team_name_tag:
+                    continue
+
+                team_name = team_name_tag.get_text(strip=True)
+                
+                # Create a dictionary for the team's stats
+                team_stats = {
+                    "rank": len(standings_data) + 1,
+                    "team": {"name": team_name},
+                    "games": cells[1].get_text(strip=True),
+                    "wins": cells[2].get_text(strip=True),
+                    "draws": cells[3].get_text(strip=True),
+                    "losses": cells[4].get_text(strip=True),
+                    "goalsFor": cells[5].get_text(strip=True),
+                    "goalsAgainst": cells[6].get_text(strip=True),
+                    "goalDifference": cells[7].get_text(strip=True),
+                    "points": cells[8].get_text(strip=True)
+                }
+                standings_data.append(team_stats)
+
+            if not standings_data:
+                logging.warning(f"Could not extract any valid team data for {league_name}")
+                continue
+
             file_path = os.path.join(STANDINGS_FOLDER, f"{league_name}.json")
             save_json(standings_data, file_path)
             logging.info(f"SUCCESS: Saved standings for {league_name}.")
 
         except requests.RequestException as e:
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
-        except (json.JSONDecodeError, IndexError, KeyError) as e:
-            logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}")
-    logging.info("--- Finished Standings Scraper (api-football.com) ---")
+        except Exception as e:
+            logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}", exc_info=True)
+    logging.info("--- Finished Standings Scraper (ESPN) ---")
 
 
 # -----------------------------
@@ -161,7 +186,7 @@ def save_standings_from_api_football():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_api_football()
+        save_standings_from_espn()
         save_team_fixture_data()
         save_league_fixture_data()
         
