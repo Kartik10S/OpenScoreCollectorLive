@@ -119,8 +119,11 @@ def save_standings_from_sofascore():
     This is more reliable than scraping a website.
     """
     logging.info("--- Starting Standings Scraper (SofaScore) ---")
+    # --- FIX: Added more realistic browser headers to avoid being blocked ---
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Referer': 'https://www.sofascore.com/',
+        'Cache-Control': 'no-cache'
     }
     for league_name, ids in SOFASCORE_LEAGUE_IDS.items():
         try:
