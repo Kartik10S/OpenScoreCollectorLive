@@ -55,13 +55,13 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- BBC Sport URLs for standings ---
-BBC_LEAGUE_URLS = {
-    "premier-league": "https://www.bbc.com/sport/football/premier-league/table",
-    "laliga": "https://www.bbc.com/sport/football/spanish-la-liga/table",
-    "serie-a": "https://www.bbc.com/sport/football/italian-serie-a/table",
-    "bundesliga": "https://www.bbc.com/sport/football/german-bundesliga/table",
-    "ligue-1": "https://www.bbc.com/sport/football/french-ligue-one/table"
+# --- NEW: FotMob URLs for standings ---
+FOTMOB_LEAGUE_URLS = {
+    "premier-league": "https://www.fotmob.com/leagues/47/table/premier-league",
+    "laliga": "https://www.fotmob.com/leagues/87/table/laliga",
+    "serie-a": "https://www.fotmob.com/leagues/55/table/serie-a",
+    "bundesliga": "https://www.fotmob.com/leagues/54/table/bundesliga",
+    "ligue-1": "https://www.fotmob.com/leagues/53/table/ligue-1"
 }
 
 # -----------------------------
@@ -113,60 +113,50 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using BBC Sport with updated selectors ---
-def save_standings_from_bbc():
+# --- NEW: Standings scraper using FotMob ---
+def save_standings_from_fotmob():
     """
-    Scrapes standings data from BBC Sport by parsing the HTML table.
+    Scrapes standings data from FotMob by parsing embedded JSON from the page.
     """
-    logging.info("--- Starting Standings Scraper (BBC Sport) ---")
+    logging.info("--- Starting Standings Scraper (FotMob) ---")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    for league_name, url in BBC_LEAGUE_URLS.items():
+    for league_name, url in FOTMOB_LEAGUE_URLS.items():
         try:
             logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
             response = requests.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.text, 'html.parser')
+            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
+            
+            if not script_tag:
+                logging.warning(f"No __NEXT_DATA__ script tag found for {league_name}. Page structure may have changed.")
+                continue
+
+            data = json.loads(script_tag.string)
+            # Navigate through FotMob's specific JSON structure
+            table_data = data.get('pageProps', {}).get('table', {}).get('tables', [{}])[0].get('table', {}).get('all', [])
+
+            if not table_data:
+                logging.warning(f"No standings data found in JSON for {league_name}.")
+                continue
+
+            # Reformat the data to match our desired structure
             standings_data = []
-            
-            # --- FIX: Using a more stable selector based on the provided HTML ---
-            table = soup.find('table', {'data-testid': 'football-table'})
-            if not table:
-                logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
-                continue
-            
-            rows = table.select('tbody tr')
-            
-            if not rows:
-                logging.warning(f"No standings rows found for {league_name}.")
-                continue
-
-            for row in rows:
-                cells = row.find_all('td')
-                # A full data row has 10 cells. Some rows are just for notes.
-                if len(cells) < 10:
-                    continue
-                
-                # --- FIX: Using a more stable selector for the team name ---
-                team_name_tag = cells[1].find('span', class_='visually-hidden')
-                if not team_name_tag:
-                    continue
-
-                team_name = team_name_tag.get_text(strip=True)
-                
+            for team in table_data:
                 team_stats = {
-                    "rank": cells[0].get_text(strip=True),
-                    "team": {"name": team_name},
-                    "games": cells[2].get_text(strip=True),
-                    "wins": cells[3].get_text(strip=True),
-                    "draws": cells[4].get_text(strip=True),
-                    "losses": cells[5].get_text(strip=True),
-                    "goalsFor": cells[6].get_text(strip=True),
-                    "goalsAgainst": cells[7].get_text(strip=True),
-                    "goalDifference": cells[8].get_text(strip=True),
-                    "points": cells[9].get_text(strip=True)
+                    "rank": team.get('idx'),
+                    "team": {"name": team.get('name')},
+                    "games": team.get('played'),
+                    "wins": team.get('wins'),
+                    "draws": team.get('draws'),
+                    "losses": team.get('losses'),
+                    "goalsFor": team.get('scoresStr', '-').split('-')[0].strip(),
+                    "goalsAgainst": team.get('scoresStr', '-').split('-')[1].strip(),
+                    "goalDifference": team.get('goalConDiff'),
+                    "points": team.get('pts')
                 }
                 standings_data.append(team_stats)
 
@@ -182,7 +172,7 @@ def save_standings_from_bbc():
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
         except Exception as e:
             logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}", exc_info=True)
-    logging.info("--- Finished Standings Scraper (BBC Sport) ---")
+    logging.info("--- Finished Standings Scraper (FotMob) ---")
 
 
 # -----------------------------
@@ -191,7 +181,7 @@ def save_standings_from_bbc():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_bbc()
+        save_standings_from_fotmob()
         save_team_fixture_data()
         save_league_fixture_data()
         
