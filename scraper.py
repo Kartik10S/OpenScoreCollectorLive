@@ -55,7 +55,7 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: The Guardian URLs for standings ---
+# --- The Guardian URLs for standings ---
 GUARDIAN_LEAGUE_URLS = {
     "premier-league": "https://www.theguardian.com/football/premierleague/table",
     "laliga": "https://www.theguardian.com/football/laliga/table",
@@ -113,7 +113,7 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using The Guardian ---
+# --- NEW: Standings scraper using The Guardian with updated selectors ---
 def save_standings_from_the_guardian():
     """
     Scrapes standings data from The Guardian by parsing the HTML table.
@@ -131,26 +131,25 @@ def save_standings_from_the_guardian():
             soup = BeautifulSoup(response.text, 'html.parser')
             standings_data = []
             
-            # Find all table rows in the main standings table
-            rows = soup.select('.table--league-table .table__row-grouping')
+            # --- FIX: Updated CSS selector to match the new website structure ---
+            table = soup.find('table', class_='table--football')
+            if not table:
+                logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
+                continue
+            
+            rows = table.select('tbody tr')
             
             if not rows:
-                logging.warning(f"No standings rows found for {league_name}. Page structure may have changed.")
+                logging.warning(f"No standings rows found for {league_name}.")
                 continue
 
             for row in rows:
-                # Extract all cell data from the row
                 cells = row.find_all('td')
-                if len(cells) < 10: # A valid row should have at least 10 columns
+                if len(cells) < 10:
                     continue
                 
-                team_name_tag = cells[1].find('span', class_='team-name__long')
-                if not team_name_tag:
-                    continue
-
-                team_name = team_name_tag.get_text(strip=True)
+                team_name = cells[1].get_text(strip=True)
                 
-                # Create a dictionary for the team's stats
                 team_stats = {
                     "rank": cells[0].get_text(strip=True),
                     "team": {"name": team_name},
