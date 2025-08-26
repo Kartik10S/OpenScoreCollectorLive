@@ -55,7 +55,7 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: FotMob URLs for standings ---
+# --- FotMob URLs for standings ---
 FOTMOB_LEAGUE_URLS = {
     "premier-league": "https://www.fotmob.com/leagues/47/table/premier-league",
     "laliga": "https://www.fotmob.com/leagues/87/table/laliga",
@@ -113,7 +113,7 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using FotMob ---
+# --- NEW: Standings scraper using FotMob with updated JSON path ---
 def save_standings_from_fotmob():
     """
     Scrapes standings data from FotMob by parsing embedded JSON from the page.
@@ -136,8 +136,8 @@ def save_standings_from_fotmob():
                 continue
 
             data = json.loads(script_tag.string)
-            # Navigate through FotMob's specific JSON structure
-            table_data = data.get('pageProps', {}).get('table', {}).get('tables', [{}])[0].get('table', {}).get('all', [])
+            # --- FIX: Updated the path to find the table data in the new JSON structure ---
+            table_data = data.get('props', {}).get('pageProps', {}).get('content', {}).get('table', {}).get('tables', [{}])[0].get('table', {}).get('all', [])
 
             if not table_data:
                 logging.warning(f"No standings data found in JSON for {league_name}.")
