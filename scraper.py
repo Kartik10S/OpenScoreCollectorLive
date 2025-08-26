@@ -4,7 +4,6 @@ import datetime
 import logging
 import requests
 import traceback
-from bs4 import BeautifulSoup
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -50,39 +49,37 @@ TEAM_FIXTURE_URLS = {
     "wolves": "https://fixturedownload.com/feed/json/epl-2025/wolves"
 }
 
-LEAGUE_STANDINGS_URLS = {
-    "premier-league": "https://www.livescore.com/en/football/england/premier-league/standings/",
-    "laliga": "https://www.livescore.com/en/football/spain/laliga/standings/",
-    "serie-a": "https://www.livescore.com/en/football/italy/serie-a/standings/",
-    "bundesliga": "https://www.livescore.com/en/football/germany/bundesliga/standings/",
-    "ligue-1": "https://www.livescore.com/en/football/france/ligue-1/standings/"
-}
-
 LEAGUE_FIXTURE_URLS = {
     "premier-league": "https://fixturedownload.com/feed/json/epl-2025",
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
+}
+
+# --- NEW: SofaScore API details for standings ---
+SOFASCORE_LEAGUE_IDS = {
+    "premier-league": {"id": 17, "season_id": 52186},
+    "laliga": {"id": 8, "season_id": 52376},
+    "serie-a": {"id": 23, "season_id": 52760},
+    "bundesliga": {"id": 35, "season_id": 52162},
+    "ligue-1": {"id": 34, "season_id": 52272}
 }
 
 # -----------------------------
 # Helper & Alerting Functions
 # -----------------------------
 def send_telegram_alert(message: str):
-    if not telegram_bot_token or not telegram_chatid:
-        return
+    if not telegram_bot_token or not telegram_chatid: return
     try:
         url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
         payload = {"chat_id": telegram_chatid, "text": f"⚠️ OpenScoreCollector Error:\n{message}"}
         requests.post(url, json=payload, timeout=10)
-    except Exception:
-        pass
+    except Exception: pass
 
 def save_json(content, path):
     try:
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(content, f, ensure_ascii=False, indent=2)
         logging.info(f"Saved JSON to {path}")
-    except Exception:
-        pass
+    except Exception: pass
 
 def fetch_data_for_date(date_str):
     try:
@@ -90,8 +87,7 @@ def fetch_data_for_date(date_str):
         res = requests.get(url, timeout=20)
         res.raise_for_status()
         return res.json()
-    except requests.RequestException:
-        return {}
+    except requests.RequestException: return {}
 
 # -----------------------------
 # Scraper Functions
@@ -116,38 +112,28 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- FIX: Added detailed logging to diagnose the issue ---
-def save_standings_from_livescore():
+# --- NEW: Standings scraper using SofaScore API ---
+def save_standings_from_sofascore():
     """
-    Scrapes standings data from LiveScore HTML pages with enhanced logging.
+    Fetches standings data from the SofaScore API.
+    This is more reliable than scraping a website.
     """
-    logging.info("--- Starting Standings Scraper ---")
+    logging.info("--- Starting Standings Scraper (SofaScore) ---")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    for league_name, url in LEAGUE_STANDINGS_URLS.items():
+    for league_name, ids in SOFASCORE_LEAGUE_IDS.items():
         try:
+            url = f"https://api.sofascore.com/api/v1/unique-tournament/{ids['id']}/season/{ids['season_id']}/standings/total"
             logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
-            response = requests.get(url, headers=headers, timeout=25)
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
             
-            if response.status_code != 200:
-                logging.error(f"FAILED to fetch {league_name}. Status code: {response.status_code}")
-                continue
-
-            logging.info(f"Successfully fetched page for {league_name}.")
-            soup = BeautifulSoup(response.text, 'html.parser')
-            script_tag = soup.find('script', {'id': '__NEXT_DATA__'})
-            
-            if not script_tag:
-                logging.error(f"FAILED to find __NEXT_DATA__ script tag for {league_name}. The page structure may have changed.")
-                continue
-
-            logging.info(f"Found __NEXT_DATA__ tag for {league_name}.")
-            data = json.loads(script_tag.string)
-            standings_data = data.get('props', {}).get('pageProps', {}).get('standings', [{}])[0].get('tables', [])
+            data = response.json()
+            standings_data = data.get("standings", [])
             
             if not standings_data:
-                logging.error(f"FAILED to extract standings table from JSON for {league_name}. The JSON structure may have changed.")
+                logging.warning(f"No standings data found in SofaScore API response for {league_name}")
                 continue
 
             file_path = os.path.join(STANDINGS_FOLDER, f"{league_name}.json")
@@ -155,10 +141,10 @@ def save_standings_from_livescore():
             logging.info(f"SUCCESS: Saved standings for {league_name}.")
 
         except requests.RequestException as e:
-            logging.error(f"CRITICAL ERROR fetching {league_name}: {e}")
-        except Exception as e:
-            logging.error(f"CRITICAL ERROR processing {league_name}: {e}")
-    logging.info("--- Finished Standings Scraper ---")
+            logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
+        except json.JSONDecodeError:
+            logging.error(f"CRITICAL ERROR: Could not parse JSON for {league_name}")
+    logging.info("--- Finished Standings Scraper (SofaScore) ---")
 
 
 # -----------------------------
@@ -167,7 +153,9 @@ def save_standings_from_livescore():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_livescore()
+        # --- Using the new, more reliable standings scraper ---
+        save_standings_from_sofascore()
+        
         save_team_fixture_data()
         save_league_fixture_data()
         
