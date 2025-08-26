@@ -4,7 +4,6 @@ import datetime
 import logging
 import requests
 import traceback
-from bs4 import BeautifulSoup
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -55,14 +54,15 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: FBref URLs for standings ---
-FBREF_LEAGUE_URLS = {
-    "premier-league": "https://fbref.com/en/comps/9/Premier-League-Stats",
-    "laliga": "https://fbref.com/en/comps/12/La-Liga-Stats",
-    "serie-a": "https://fbref.com/en/comps/11/Serie-A-Stats",
-    "bundesliga": "https://fbref.com/en/comps/20/Bundesliga-Stats",
-    "ligue-1": "https://fbref.com/en/comps/13/Ligue-1-Stats"
+# --- NEW: TheSportsDB.com URLs for standings ---
+THESPORTSDB_LEAGUE_IDS = {
+    "premier-league": 4328,
+    "laliga": 4335,
+    "serie-a": 4332,
+    "bundesliga": 4331,
+    "ligue-1": 4334
 }
+CURRENT_SEASON_PARAM = "2025-2026" # Use the format required by TheSportsDB
 
 # -----------------------------
 # Helper & Alerting Functions
@@ -113,78 +113,52 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using FBref ---
-def save_standings_from_fbref():
+# --- NEW: Standings scraper using TheSportsDB.com API ---
+def save_standings_from_thesportsdb():
     """
-    Scrapes standings data from FBref.com by parsing the HTML table.
+    Fetches standings data from TheSportsDB.com public API.
     """
-    logging.info("--- Starting Standings Scraper (FBref) ---")
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    for league_name, url in FBREF_LEAGUE_URLS.items():
+    logging.info("--- Starting Standings Scraper (TheSportsDB) ---")
+    for league_name, league_id in THESPORTSDB_LEAGUE_IDS.items():
         try:
+            url = f"https://www.thesportsdb.com/api/v1/json/3/lookuptable.php?l={league_id}&s={CURRENT_SEASON_PARAM}"
             logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
-            response = requests.get(url, headers=headers, timeout=20)
+            response = requests.get(url, timeout=20)
             response.raise_for_status()
             
-            soup = BeautifulSoup(response.text, 'html.parser')
-            standings_data = []
+            data = response.json()
+            standings_data = data.get('table')
             
-            # Find the main standings table by its unique ID structure
-            table = soup.find('table', id=lambda x: x and 'overall' in x)
-            if not table:
-                logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
-                continue
-            
-            rows = table.select('tbody tr')
-            
-            if not rows:
-                logging.warning(f"No standings rows found for {league_name}.")
-                continue
-
-            for row in rows:
-                # Skip header rows that are sometimes included in the tbody
-                if row.has_attr('class') and 'thead' in row['class']:
-                    continue
-
-                cells = row.find_all('td')
-                if len(cells) < 9:
-                    continue
-                
-                team_name_tag = cells[0].find('a')
-                if not team_name_tag:
-                    continue
-
-                team_name = team_name_tag.get_text(strip=True)
-                
-                team_stats = {
-                    "rank": row.find('th').get_text(strip=True),
-                    "team": {"name": team_name},
-                    "games": cells[1].get_text(strip=True),
-                    "wins": cells[2].get_text(strip=True),
-                    "draws": cells[3].get_text(strip=True),
-                    "losses": cells[4].get_text(strip=True),
-                    "goalsFor": cells[5].get_text(strip=True),
-                    "goalsAgainst": cells[6].get_text(strip=True),
-                    "goalDifference": cells[7].get_text(strip=True),
-                    "points": cells[8].get_text(strip=True)
-                }
-                standings_data.append(team_stats)
-
             if not standings_data:
-                logging.warning(f"Could not extract any valid team data for {league_name}")
+                logging.warning(f"No standings table found for {league_name}. The season may not have started.")
                 continue
+
+            # Reformat the data to match our desired structure
+            reformatted_data = []
+            for team in standings_data:
+                team_stats = {
+                    "rank": team.get('intRank'),
+                    "team": {"name": team.get('strTeam')},
+                    "games": team.get('intPlayed'),
+                    "wins": team.get('intWin'),
+                    "draws": team.get('intDraw'),
+                    "losses": team.get('intLoss'),
+                    "goalsFor": team.get('intGoalsFor'),
+                    "goalsAgainst": team.get('intGoalsAgainst'),
+                    "goalDifference": team.get('intGoalDifference'),
+                    "points": team.get('intPoints')
+                }
+                reformatted_data.append(team_stats)
 
             file_path = os.path.join(STANDINGS_FOLDER, f"{league_name}.json")
-            save_json(standings_data, file_path)
+            save_json(reformatted_data, file_path)
             logging.info(f"SUCCESS: Saved standings for {league_name}.")
 
         except requests.RequestException as e:
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
         except Exception as e:
             logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}", exc_info=True)
-    logging.info("--- Finished Standings Scraper (FBref) ---")
+    logging.info("--- Finished Standings Scraper (TheSportsDB) ---")
 
 
 # -----------------------------
@@ -193,7 +167,7 @@ def save_standings_from_fbref():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_fbref()
+        save_standings_from_thesportsdb()
         save_team_fixture_data()
         save_league_fixture_data()
         
