@@ -4,6 +4,7 @@ import datetime
 import logging
 import requests
 import traceback
+import random
 from config import telegram_bot_token, telegram_chatid
 
 # -----------------------------
@@ -54,7 +55,6 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- NEW: SofaScore API details for standings ---
 SOFASCORE_LEAGUE_IDS = {
     "premier-league": {"id": 17, "season_id": 52186},
     "laliga": {"id": 8, "season_id": 52376},
@@ -62,6 +62,14 @@ SOFASCORE_LEAGUE_IDS = {
     "bundesliga": {"id": 35, "season_id": 52162},
     "ligue-1": {"id": 34, "season_id": 52272}
 }
+
+# --- NEW: List of User-Agent strings to rotate ---
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:90.0) Gecko/20100101 Firefox/90.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36'
+]
 
 # -----------------------------
 # Helper & Alerting Functions
@@ -112,23 +120,21 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using SofaScore API ---
 def save_standings_from_sofascore():
     """
-    Fetches standings data from the SofaScore API.
-    This is more reliable than scraping a website.
+    Fetches standings data from the SofaScore API, rotating User-Agents to avoid being blocked.
     """
     logging.info("--- Starting Standings Scraper (SofaScore) ---")
-    # --- FIX: Added more realistic browser headers to avoid being blocked ---
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Referer': 'https://www.sofascore.com/',
-        'Cache-Control': 'no-cache'
-    }
     for league_name, ids in SOFASCORE_LEAGUE_IDS.items():
         try:
+            # --- FIX: Rotate User-Agent for each request ---
+            headers = {
+                'User-Agent': random.choice(USER_AGENTS),
+                'Referer': 'https://www.sofascore.com/',
+                'Cache-Control': 'no-cache'
+            }
             url = f"https://api.sofascore.com/api/v1/unique-tournament/{ids['id']}/season/{ids['season_id']}/standings/total"
-            logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
+            logging.info(f"Attempting to fetch standings for {league_name} with User-Agent: {headers['User-Agent']}")
             response = requests.get(url, headers=headers, timeout=20)
             response.raise_for_status()
             
@@ -156,9 +162,7 @@ def save_standings_from_sofascore():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        # --- Using the new, more reliable standings scraper ---
         save_standings_from_sofascore()
-        
         save_team_fixture_data()
         save_league_fixture_data()
         
