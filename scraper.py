@@ -132,12 +132,12 @@ def save_standings_from_the_guardian():
             standings_data = []
             
             # --- FIX: Updated CSS selector to match the new website structure ---
-            table = soup.find('table', class_='table--football')
+            table = soup.find('table', class_='table--league-table')
             if not table:
                 logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
                 continue
             
-            rows = table.select('tbody tr')
+            rows = table.select('tbody tr.table-row')
             
             if not rows:
                 logging.warning(f"No standings rows found for {league_name}.")
@@ -148,7 +148,11 @@ def save_standings_from_the_guardian():
                 if len(cells) < 10:
                     continue
                 
-                team_name = cells[1].get_text(strip=True)
+                team_name_tag = cells[1].find('span', class_='team-name__long')
+                if not team_name_tag:
+                    continue
+
+                team_name = team_name_tag.get_text(strip=True)
                 
                 team_stats = {
                     "rank": cells[0].get_text(strip=True),
