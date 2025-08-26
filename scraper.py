@@ -55,13 +55,13 @@ LEAGUE_FIXTURE_URLS = {
     "bundesliga": "https://fixturedownload.com/feed/json/bundesliga-2025"
 }
 
-# --- The Guardian URLs for standings ---
-GUARDIAN_LEAGUE_URLS = {
-    "premier-league": "https://www.theguardian.com/football/premierleague/table",
-    "laliga": "https://www.theguardian.com/football/laliga/table",
-    "serie-a": "https://www.theguardian.com/football/seriea/table",
-    "bundesliga": "https://www.theguardian.com/football/bundesliga/table",
-    "ligue-1": "https://www.theguardian.com/football/ligue1/table"
+# --- NEW: BBC Sport URLs for standings ---
+BBC_LEAGUE_URLS = {
+    "premier-league": "https://www.bbc.com/sport/football/premier-league/table",
+    "laliga": "https://www.bbc.com/sport/football/spanish-la-liga/table",
+    "serie-a": "https://www.bbc.com/sport/football/italian-serie-a/table",
+    "bundesliga": "https://www.bbc.com/sport/football/german-bundesliga/table",
+    "ligue-1": "https://www.bbc.com/sport/football/french-ligue-one/table"
 }
 
 # -----------------------------
@@ -113,16 +113,16 @@ def save_league_fixture_data():
         except Exception as e:
             logging.error(f"Could not fetch full fixture data for {league_name}: {e}")
 
-# --- NEW: Standings scraper using The Guardian with updated selectors ---
-def save_standings_from_the_guardian():
+# --- NEW: Standings scraper using BBC Sport ---
+def save_standings_from_bbc():
     """
-    Scrapes standings data from The Guardian by parsing the HTML table.
+    Scrapes standings data from BBC Sport by parsing the HTML table.
     """
-    logging.info("--- Starting Standings Scraper (The Guardian) ---")
+    logging.info("--- Starting Standings Scraper (BBC Sport) ---")
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    for league_name, url in GUARDIAN_LEAGUE_URLS.items():
+    for league_name, url in BBC_LEAGUE_URLS.items():
         try:
             logging.info(f"Attempting to fetch standings for {league_name} from {url}...")
             response = requests.get(url, headers=headers, timeout=20)
@@ -131,13 +131,13 @@ def save_standings_from_the_guardian():
             soup = BeautifulSoup(response.text, 'html.parser')
             standings_data = []
             
-            # --- FIX: Updated CSS selector to find the correct table component ---
-            table_container = soup.find('div', class_='table-container')
-            if not table_container:
-                logging.warning(f"No standings table container found for {league_name}. Page structure may have changed.")
+            # Find the main standings table
+            table = soup.find('table', class_='ssrcss-1k32n2v-Table')
+            if not table:
+                logging.warning(f"No standings table found for {league_name}. Page structure may have changed.")
                 continue
             
-            rows = table_container.select('tbody tr')
+            rows = table.select('tbody tr')
             
             if not rows:
                 logging.warning(f"No standings rows found for {league_name}.")
@@ -148,7 +148,11 @@ def save_standings_from_the_guardian():
                 if len(cells) < 10:
                     continue
                 
-                team_name = cells[1].get_text(strip=True)
+                team_name_tag = cells[1].find('span', class_='ssrcss-q0327g-TeamName')
+                if not team_name_tag:
+                    continue
+
+                team_name = team_name_tag.get_text(strip=True)
                 
                 team_stats = {
                     "rank": cells[0].get_text(strip=True),
@@ -176,7 +180,7 @@ def save_standings_from_the_guardian():
             logging.error(f"CRITICAL ERROR fetching standings for {league_name}: {e}")
         except Exception as e:
             logging.error(f"CRITICAL ERROR parsing standings for {league_name}: {e}", exc_info=True)
-    logging.info("--- Finished Standings Scraper (The Guardian) ---")
+    logging.info("--- Finished Standings Scraper (BBC Sport) ---")
 
 
 # -----------------------------
@@ -185,7 +189,7 @@ def save_standings_from_the_guardian():
 def updateToday():
     logging.info("Starting updateToday process...")
     try:
-        save_standings_from_the_guardian()
+        save_standings_from_bbc()
         save_team_fixture_data()
         save_league_fixture_data()
         
